@@ -1,0 +1,8 @@
+# ★運ぶ道具(scripts/ship-seikyu.mjs)が作る。手で書かない★
+# repo には置く（見張りが見る）が ★客には配らない★ 物。
+docs/
+supabase/
+tests/
+seikyu/tests/
+scripts/
+node_modules/
