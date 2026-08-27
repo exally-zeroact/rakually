@@ -19,7 +19,7 @@ name: CI
 #   ★外した理由は1つだけ＝給与の画面(kyuyo/)を運んでいないから★（機能を削った訳ではない）。
 #   ★戻す条件★: 本番にも給与を出す日（＝10月の改名・URL切替の塊）。その時 一緒に戻す。
 #   ★手で消さない★＝ここを直す時は rakually-test 側を直して 運び直す。
-#   ★外したステップ 67本★
+#   ★外したステップ 69本★
 #     ・Stamp tool tests (ハッシュが決定論か=CRLF/LF・OS差でブレないか)  ★理由★ 入口のインラインscriptと 撤去した看板の一覧を見る作り＝この repo には見る物が無い
 #     ・★配信ガード (href="/…" 等の絶対パス・本番倉庫への誤接続を止める)  ★理由★ ★配信HTMLの本数で空振りを見る作り★＝この repo は2枚しか無い（自己確認も給与の画面を壊す作り）
 #     ・★配信ガード (わざと壊して赤になるかの自己確認・6通り)  ★理由★ ★配信HTMLの本数で空振りを見る作り★＝この repo は2枚しか無い（自己確認も給与の画面を壊す作り）
@@ -31,6 +31,8 @@ name: CI
 #     ・★法定値の直書きガード (率・額が説明文に固定されていないか)  ( tests/no-hardcoded-statutory.test.mjs )
 #     ・★ファイルの渡し方 (種類・全端末で落とす=共有シートを使わない・名前に日時)  ( kyuyo/tests/file-out.test.mjs )
 #     ・★スマホ幅の見た目 (ボタンが折り返さない / 対象月の選択は1つで重ならない)  ( kyuyo/tests/button-wrap.test.mjs , kyuyo/tests/ym-picker.test.mjs )
+#     ・★振込指定日が対象月に追従するか (12か月/年またぎ/末日/うるう年/土日祝/年末年始/全銀の4文字)  ( kyuyo/tests/furikomi-date.test.mjs )
+#     ・★振込指定日 (昔の姿へ戻す/門番を外す/休みを見ない に戻したら赤になるかの自己確認)  ( kyuyo/tests/furikomi-date.test.mjs )
 #     ・★振込タブ (印刷から切り離した / 機能を消していない / 0件で押せない＋理由 / 空ファイルを作らない)  ( kyuyo/tests/furikomi-tab.test.mjs )
 #     ・★契約v0 (レジストリ / 契約の線=呼ばれているか・面を呼び返していないか)  ( tests/op-registry.test.mjs , tests/op-boundary.test.mjs )
 #     ・★最低賃金 47県が公式の実額と一致 (前科のある行・1円単位)  ( kyuyo/tests/saitei-official.test.mjs )
@@ -218,6 +220,10 @@ jobs:
       #   覚書に書いた env:'prod' に釣られると ★本番で判定が逆になる★（帯を出す/タイルを出す）。
       - name: ★この repo の名札(env)を1か所で読む (覚書の env に釣られないか・9通り)
         run: node scripts/repo-env.mjs --self-test
+      - name: ★打つ欄が16px以上か (本物のChromeで実測・隠れている物も数える)
+        run: node scripts/input-size.mjs
+      - name: ★打つ欄16px (わざと小さくして 捕まえられるかの自己確認)
+        run: node scripts/input-size.mjs --self-test
       - name: ★取引先7問 実UI (本物の画面を動かして 押す物の一覧を出してから全部 押す)
         run: node seikyu/tests/partner-ask-ui.mjs
       # ★1つのステップで 給与と請求書を混ぜない★（指示役 2026-08-26 の運びで実際に詰まった）
