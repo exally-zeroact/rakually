@@ -342,9 +342,28 @@ function ship(to, dry) {
   console.log('★運び先に無い物を見に行く試験を ' + dead.length + '本 外した★（元では毎回 走る）');
   dead.forEach((d) => console.log('    外した試験: ' + d.file + '  → 見に行く先 ' + d.gone.join(' , ')));
 
-  /* ★CIを 作り替える★ */
-  const ciPath = path.join(to, '.github/workflows/ci.yml');
+  /* ★CIを 作り替える★
+     ★ci.yml だけでは 足りない★＝2026-08-31 実測：webkit.yml を そのまま運んだせいで
+       置いていった試験（button-uniform / pdf-webkit / seal-shape / seal-pos）を 指し続け、
+       ★本番のCIが Cannot find module で 赤★になった。
+     ⇒ ★.github/workflows の yml を ぜんぶ 同じやり方で 作り替える★ */
   const exists = (f) => fs.existsSync(path.join(to, f));
+  const wfDir = path.join(to, '.github/workflows');
+  const others = fs.existsSync(wfDir)
+    ? fs.readdirSync(wfDir).filter((f) => /\.ya?ml$/.test(f) && f !== 'ci.yml') : [];
+  others.forEach((f) => {
+    const fp = path.join(wfDir, f);
+    const r2 = ciForShipped(fs.readFileSync(fp, 'utf8'), exists);
+    if (r2.mixed.length) {
+      console.error('★' + f + ' の1つのステップで 在る物と無い物が 混ざっています★');
+      r2.mixed.forEach((m) => console.error('  ・' + m.name + ' … 無い＝' + m.gone.join(' , ')));
+      throw new Error('mixed in ' + f);
+    }
+    fs.writeFileSync(fp, ciHeaderNote(r2.yml, r2.dropped), 'utf8');
+    console.log('★' + f + ' も 作り替えた★ … 外したステップ ' + r2.dropped.length + '件'
+      + (r2.dropped.length ? '（' + r2.dropped.map((d) => d.name).join(' ／ ') + '）' : ''));
+  });
+  const ciPath = path.join(to, '.github/workflows/ci.yml');
   const ci = ciForShipped(fs.readFileSync(ciPath, 'utf8'), exists);
   if (ci.mixed.length) {
     console.error('★1つのステップの中で 在る物と無い物が混ざっています（勝手に直しません）★');
