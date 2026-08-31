@@ -45,9 +45,9 @@ const EXCEPTIONS = {
     restoreWhen: 'ライブラリを差し替える時。',
   },
   /* ★lib/xlsx-io.js の例外は 2026-08-17 に消した★
-     ＝グリッド(book.html)の書き出し部品なので Rakually には持って来ていない。
+     ＝グリッド(book.html)の書き出し部品なので Rakunally には持って来ていない。
        ★持っていない物の例外を残すと、例外表が腐ったまま緑になる★（この検査自身が実在を見ている）。
-     戻す条件＝Rakually に表(ブック)を置く日に、部品と一緒にこの例外も戻す。 */
+     戻す条件＝Rakunally に表(ブック)を置く日に、部品と一緒にこの例外も戻す。 */
 };
 
 /* コメントを落とす（実際に動くコードだけ見る）。
@@ -166,6 +166,7 @@ T('検査が空振りしていない（配信物を実際に読めている）',
 
 console.log('\n── 実測 ──');
 console.log('  配信物: ' + shipped.length + '本（.html/.js）/ 違反 ' + total(v) + '件 / 例外(理由つき) ' + Object.keys(EXCEPTIONS).length + '件');
+
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

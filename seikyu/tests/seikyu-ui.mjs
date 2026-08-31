@@ -189,15 +189,15 @@ await TA('1. ★3画面ぜんぶのボタンを1つ残らず押しても、JSが
 /* ═══ 1-b. 見た目の土台（スイート共通の皮）と、潰れない書き方 ═══
    jsdom は幅を計算しないので、ここでは ★潰れない書き方になっているか★ を見る
    （実物の幅は実機幅の画面で定規を当てて確かめる。この検査はその前段の網）。 */
-const SKIN = fs.readFileSync(path.join(ROOT, 'css/rakually-ui.css'), 'utf8');
+const SKIN = fs.readFileSync(path.join(ROOT, 'css/rakunally-ui.css'), 'utf8');
 const APPCSS = fs.readFileSync(path.join(ROOT, 'seikyu/css/app.css'), 'utf8');
 const CSS = SKIN + '\n' + APPCSS;
 /* 色の検査は「実際に効いている指定」だけを見る（説明文の中の色名を数えない） */
 const CSS_CODE = CSS.replace(/\/\*[\s\S]*?\*\//g, ' ');
 
 T('1-b. ★見た目はスイート共通の皮を読んでいる（請求書だけ別の画面にしない）', () => {
-  ok(html.indexOf('<link rel="stylesheet" href="../css/rakually-ui.css') >= 0, '共通の皮を読んでいない');
-  ok(html.indexOf('rakually-ui.css') < html.indexOf('css/app.css'), '皮より先にアプリのCSSを読んでいる（差分が効かない）');
+  ok(html.indexOf('<link rel="stylesheet" href="../css/rakunally-ui.css') >= 0, '共通の皮を読んでいない');
+  ok(html.indexOf('rakunally-ui.css') < html.indexOf('css/app.css'), '皮より先にアプリのCSSを読んでいる（差分が効かない）');
 });
 
 T('1-b. ★うちのミント #52B788 と 差し色 #3D9E72 が実際に効いている（請求書だけ別の緑にしない）', () => {
@@ -329,9 +329,37 @@ T('2-a. ★出すボタンは1つだけ大きく・ほかは畳む（7個 横並
     && b.id !== 'b-goto-rows'
     /* ★「どの紙で出しますか」の見本＝選ぶ物であって 出す口ではない★（2026-08-24）
        ここで数えたいのは ★紙を出すボタンが横に並んでいないか★ だけ。 */
-    && !/tpl-pick/.test(b.className) && b.id !== 'b-tpl-change');
+    && !/tpl-pick/.test(b.className) && b.id !== 'b-tpl-change'
+    /* ★聞く形（pask）の中のボタンは 出す口ではない★（2026-08-29）
+       「これで」「飛ばす」「なぜ？」「押すと直せます」＝★答える為の物★。
+       ここで数えたいのは ★紙を出すボタンが横に並んでいないか★ だけ。
+       ★聞く形は 答え終われば 自分で消える★ので 画面に残り続けない。 */
+    && !b.closest('.pask'));
   eq(outside.map((b) => b.id).join(','), 'b-issue', '畳みの外にボタンが多い: ' + outside.map((b) => b.id));
   eq(shown($('b-pay-add')), false, '★下書きなのに「入金を記録」が出ている（まだ請求していない）★');
+});
+
+/* ★畳みの見出しは「中に本当に在る物」で書く★（2026-08-11 実機・2026-08-30 再発）
+   ★開くまで 何が出来るか 分からない★のを 止める為の決まり。
+   ★中に在るのに 見出しに無い★＝この見張りが 赤になる。
+   （2026-08-30 実際に赤になった：PDFで保存を足したのに 見出しが「下書き・下見・印刷・Excel」のままだった） */
+T('2-a. ★畳みの見出しに 中の出し口が ぜんぶ 書いてある（PDFを含む）', () => {
+  const sum = ($('out-sum').textContent || '');
+  /* 見出しの言葉 ← 中の押す物（id と 見出しの言葉の対応表。★増やしたら ここに1行★） */
+  const WORD = { 'b-save': '下書き', 'b-preview': '下見', 'b-pdf': 'PDF', 'b-pdfopen': '送る',
+    'b-print': '印刷', 'b-delivery': '納品書', 'b-xlsx': 'Excel' };
+  const shown = (el) => { for (let e = el; e && e !== doc.body; e = e.parentElement) { if (e.style && e.style.display === 'none') return false; } return true; };
+  const inside = [...$('out-box').querySelectorAll('button')].filter((b) => shown(b) && b.id);
+  const miss = [], unknown = [];
+  inside.forEach((b) => {
+    const w = WORD[b.id];
+    if (!w) { unknown.push(b.id + '（' + (b.textContent || '').trim() + '）'); return; }
+    if (sum.indexOf(w) < 0) miss.push(w + '（' + b.id + '）');
+  });
+  ok(!unknown.length, '★対応表に無い出し口が 増えている＝見出しに書けているか 分からない★ ' + unknown.join(' / '));
+  ok(!miss.length, '★中に在るのに 見出しに書いていない★ ' + miss.join(' / ') + ' … 見出し「' + sum + '」');
+  ok(inside.length >= 4, '★中の出し口が ' + inside.length + '個＝数えられていない（空振り）★');
+  console.log('     見出し「' + sum + '」 ／ 中の出し口 ' + inside.length + '個 ぜんぶ 書いてある');
 });
 
 T('2-a. ★タブの順と動詞を給与にそろえた（設定→入力→一覧・「作る」ではなく「入力」）', () => {

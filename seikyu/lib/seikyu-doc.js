@@ -258,6 +258,7 @@
         yago: od.yago || '', addr: od.addr || '', tel: od.tel || '',
         invoiceNo: od.invoiceNo || '', bank: od.bank || '',
         sealDataUrl: od.sealDataUrl || '', sealSizeMm: sealSizeMm(od.sealSizeMm), logoDataUrl: od.logoDataUrl || '',
+        sealX: sealXY(od.sealX, od.sealSizeMm, 'x'), sealY: sealXY(od.sealY, od.sealSizeMm, 'y'),
       },
       totals: { subtotal: t.subtotal || 0, taxTotal: t.taxTotal || 0, grandTotal: t.grandTotal || 0 },
       byRate: t.byRate || [],
@@ -292,12 +293,42 @@
      ★紙に重ねるだけの飾りではない★。押してある/無いで相手の受け取り方が変わるので、
      「入れられる」「大きさを変えられる」「消せる」を揃える。
      代行請求の実物と同じ扱い（invoice-pdf.js:927 hankoSizeMm 既定21mm・薄く重ねる）。 */
-  var SEAL_DEFAULT_MM = 21;
+  /* ★既定は 17mm★（司さん 2026-08-30 実物の角印で 測り直した）
+     ＝実寸21mmの角印は 紙には その8割で押す。★紙の側（seikyu-paper.sealMm）と 同じ数★
+     （2026-08-31 実測で 食い違っていた＝画面は「既定21mm」と言い、紙は 17mmで押していた） */
+  var SEAL_DEFAULT_MM = 17;
   var SEAL_MIN_MM = 10;
   var SEAL_MAX_MM = 40;
   /* 倉庫の1行に画像を入れるので上限を決める。★超えたら黙って縮めずに赤で返す★
      （黙って縮めると「押したはずの印が薄い/欠ける」になり、押した本人が気づけない） */
   var SEAL_MAX_BYTES = 300 * 1024;
+
+  /* ★印の場所は 紙の上のどこでもよい★
+     （司さん 2026-08-31「そこも違うかないか？ 場所は自由に変えれんのか？」）
+     ★決まった置き方を 2つ3つ 用意して 選ばせるのが 間違いだった★
+       ＝会社ごとに 押す所は 違う（社名に重ねる／その少し右／右下 など）。
+         うちが 決めた所しか 選べないなら「変えられる」とは言わない。
+     ⇒ ★紙の左上からの mm で 自由に置く★（指で つまんで動かす道も 画面に付ける）
+     ・未設定（null）＝★今までの場所★（社名に重ねる）＝黙って 見た目を 変えない
+     ・値が入ったら その通り。★紙から出ない所までに 収める★（A4 210×297mm − 印の大きさ）
+     ★この関数が 唯一の正★（紙も 画面も ここを通る） */
+  var PAPER_W_MM = 210, PAPER_H_MM = 297;
+  /** 紙の上の位置（mm）。null＝未設定（今までの場所）。印の大きさぶん 内側に収める。 */
+  function sealXY(v, sizeMm, axis) {
+    if (v === '' || v === null || v === undefined) return null;
+    var n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    var mm = sealSizeMm(sizeMm);
+    var max = ((axis === 'y') ? PAPER_H_MM : PAPER_W_MM) - mm;
+    n = Math.round(n * 10) / 10;
+    return Math.max(0, Math.min(max, n));
+  }
+
+  /* ★下は 2026-08-30 に作った「決まった置き方」＝司さんに 2度 違うと言われた物★
+     ★残さない★（実在しない置き方／うちが決めた所しか選べない形）。
+     ここに書き残すのは ★同じ物を もう一度 作らない為★。
+     ・'left'（社名の左に置く） … 2026-08-30「左に置くは違うやろが」
+     ・'on'/'edge' の2択        … 2026-08-31「場所は自由に変えれんのか？」 */
 
   function sealSizeMm(v) {
     var n = Number(v);
@@ -683,6 +714,78 @@
     };
   }
 
+  /* ── ★複製して作る（この紙と 同じ物を もう1通）★ ─────────────────────
+     ★司さん 2026-08-30「競合が当たり前にしてる事は こちらも当たり前にしてな」★
+       請求書ソフトは どこも「前の1通をコピーして 次を作る」を 持っている
+       （毎月 同じ相手に 似た内容を 出すのが 商売の普通の形）。うちだけ 無かった。
+
+     ★写す物★     … 相手・明細（自由な列の中身ごと）・様式・列・税の入れ方・丸め
+                     件名・備考・支払い条件・源泉・控除・前書き・和暦
+     ★写さない物★ … id・番号（新しく取り直す）・請求日／期限（新しく決める）
+                     状態（下書きに戻す）・発行時の写し・合計（数え直す）
+                     ★入金は 元の紙の物★＝複製に 付いてこない（付けたら 二重に数える）
+     ★同じ紙が 2通 出ないように★ … 番号は 空にして返す（呼ぶ側が 採番し直す）。 */
+  function duplicateDoc(v) {
+    var src = v || {};
+    var d = src.data || {};
+    var data = {};
+    /* data は 自由枠＝★知っている物だけ 白紙から積む、では 落ちる★。
+       まるごと写して、★持ち越してはいけない物だけ 消す★（新しい項目が 増えても 落ちない）。 */
+    try { data = JSON.parse(JSON.stringify(d)); } catch (e) { data = {}; }
+    delete data.askOk;              // 「この内容でよいか」の答え＝新しい紙では もう一度
+    delete data.tplAsked;           // 様式を聞いたか＝様式そのものは 下で写す
+    data.noMode = 'auto';           // ★手打ちの番号を 継がない★
+    /* ★どの紙から写したか★は data（自由枠）に置く。
+       ★棚に列を足さない★＝倉庫は quote_from しか受け取らない作りで、
+       知らない列を渡すと ★黙って落ちる★（司さんの一言が要る所には 触らない）。 */
+    if (src.id) data.copyFrom = src.id;
+    var lines = (src.lines || []).map(function (ln) {
+      var o = Object.assign({}, ln);
+      if (ln && ln.extra) o.extra = Object.assign({}, ln.extra);
+      return o;
+    });
+    return {
+      doc_type: src.doc_type || 'invoice',
+      status: 'draft',
+      no: '',
+      partner_id: src.partner_id || '',
+      issue_ymd: '', due_ymd: '',
+      tax_mode: src.tax_mode, rounding: src.rounding,
+      lines: lines,
+      totals: {}, snapshot: {},
+      data: data,
+      template_id: src.template_id || '',
+    };
+  }
+
+  /* ── ★あて名の敬称★（司さん・指示役 ④の残り「敬称の自動判定」）──────────────
+     ★日本の紙の作法★
+       会社だけに出す        … 「○○株式会社　御中」
+       担当者あてに出す      … 「○○株式会社」＋改行＋「山田　様」
+                               ★御中 と 様 を 一緒に付けない★（二重敬称＝間違い）
+       人に出す（屋号なし）  … 「山田　様」
+     ★直す前は 併記していた★（seikyu-paper.js が 会社行に御中、下の行に 様 を 出していた）。
+     ★1か所で決める★＝紙も 聞く形も この関数を通す（2か所で 別の作法を持たない）。 */
+  function addresseeOf(p) {
+    var q = p || {};
+    var name = String(q.name == null ? '' : q.name).trim();
+    var person = String(q.person == null ? '' : q.person).trim();
+    var h = String((q.honor || q.keisho) || '').trim();
+    if (h === '（なし）' || h === '(なし)' || h === 'なし') h = '';
+    if (person) {
+      /* ★担当者が居る＝その人あて★。会社名は 敬称なしで 置く（社名は 名乗りであって あて先ではない） */
+      return {
+        line1: name, honor1: '',
+        line2: person, honor2: '様',
+        why: '担当者「' + person + '」あてなので、会社名には 敬称を付けません'
+          + '（御中 と 様 を 一緒に付けるのは 二重敬称です）。',
+      };
+    }
+    return { line1: name, honor1: h, line2: '', honor2: '', why: h
+      ? ('会社あてなので「' + h + '」を 付けます。')
+      : '敬称は 付けません（「（なし）」を選んでいます）。' };
+  }
+
   return {
     DOC_TYPES: DOC_TYPES, STATUSES: STATUSES, FROZEN_FIELDS: FROZEN_FIELDS,
     DOC_KINDS: DOC_KINDS, DOC_LABEL: DOC_LABEL, docLabel: docLabel,
@@ -692,6 +795,7 @@
     rowIssuesOf: rowIssuesOf,
     deductionsOf: deductionsOf, deductTotalOf: deductTotalOf, validateDeductions: validateDeductions,
     MAX_DEDUCTIONS: MAX_DEDUCTIONS, periodLabelOf: periodLabelOf, prevMonthOf: prevMonthOf,
+    addresseeOf: addresseeOf,
     NUMBER_FORMATS: NUMBER_FORMATS, PAY_TERMS: PAY_TERMS, PAY_STATE_LABEL: PAY_STATE_LABEL,
     PAY_METHODS: PAY_METHODS, receiptAmountOf: receiptAmountOf, validateReceipt: validateReceipt,
     formatNo: formatNo, nextNo: nextNo, bumpNo: bumpNo, validateNumbering: validateNumbering,
@@ -700,8 +804,10 @@
     billedOf: billedOf, payableOf: payableOf,
     snapshotOf: snapshotOf, partnerNameOf: partnerNameOf,
     validateSeal: validateSeal, sealSizeMm: sealSizeMm,
+    sealXY: sealXY, PAPER_W_MM: PAPER_W_MM, PAPER_H_MM: PAPER_H_MM,
     SEAL_DEFAULT_MM: SEAL_DEFAULT_MM, SEAL_MIN_MM: SEAL_MIN_MM, SEAL_MAX_MM: SEAL_MAX_MM, SEAL_MAX_BYTES: SEAL_MAX_BYTES,
     paymentStateOf: paymentStateOf,
     validateInvoice: validateInvoice, convertQuoteToInvoice: convertQuoteToInvoice,
+    duplicateDoc: duplicateDoc,
   };
 });

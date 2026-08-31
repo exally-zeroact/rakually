@@ -55,7 +55,7 @@ win.addEventListener('unhandledrejection', (e) => errs.push('未処理:' + ((e.r
   win.__mkSb = () => m.exports.createFakeSupa({
     uid: 'u1',
     tables: {
-      pay_org: [{ account_id: 'u1', data: { yago: '合同会社Rakually', invoiceNo: 'T3500003003293' }, updated_at: '2026-08-01T00:00:00Z' }],
+      pay_org: [{ account_id: 'u1', data: { yago: '合同会社Rakunally', invoiceNo: 'T3500003003293' }, updated_at: '2026-08-01T00:00:00Z' }],
       pay_partners: [{ id: 'pt_a', account_id: 'u1', sort: 0, data: { name: 'A株式会社', keisho: '御中' }, deleted_at: null }],
       pay_invoices: [], pay_receipts: [],
       pay_companies: [{ account_id: 'u1', data: {}, updated_at: '2026-08-01T00:00:00Z' }],
@@ -64,7 +64,7 @@ win.addEventListener('unhandledrejection', (e) => errs.push('未処理:' + ((e.r
     unique: { pay_invoices: [['account_id', 'doc_type', 'no']] },
   });
 }
-const DROP = ['supa-config.js', 'auth.js', 'env-badge.js', 'store.js', 'rakually-login.js'];
+const DROP = ['supa-config.js', 'auth.js', 'env-badge.js', 'store.js', 'rakunally-login.js'];
 for (const m of html.matchAll(/<script src="([^"]+)"><\/script>/g)) {
   const src = m[1].split('?')[0];
   if (/^https?:/.test(src) || DROP.indexOf(src.split('/').pop()) >= 0) continue;
@@ -99,7 +99,9 @@ const NM = require_(path.join(ROOT, 'seikyu/lib/seikyu-name.js'));
   const shots = [...doc.querySelectorAll('.tpl-shot iframe')]
     .map((f) => f.getAttribute('srcdoc') || '').filter((x) => x.length > 500);
   N.見本の絵 = shots.length;
-  N.見本が別の絵 = (shots.length === 2 && shots[0] !== shots[1]) ? 1 : 0;
+  /* ★2枚 決め打ちをやめる★＝様式が3つになったら 3枚とも別の絵か を見る（2026-08-27）
+     ★「2枚の時だけ見る」形は 3枚目を足した瞬間 黙って0になった★＝決め打ちの穴。 */
+  N.見本が別の絵 = (shots.length >= 2 && new Set(shots).size === shots.length) ? 1 : 0;
   /* ★戻って続きから★（司さん 2026-08-24）＝[変える]が在るか */
   N.戻る動線 = doc.getElementById('b-tpl-change') ? 1 : 0;
   stage.push({
@@ -107,8 +109,8 @@ const NM = require_(path.join(ROOT, 'seikyu/lib/seikyu-name.js'));
     数: '様式 ' + N.紙の様式 + '種／作る時に聞く ' + N.作る時に聞く箱 + '／見本 ' + N.見本の絵
       + '枚（別の絵 ' + N.見本が別の絵 + '）／戻る動線 ' + N.戻る動線,
   });
-  if (N.紙の様式 < 3) note.push('★様式は2種だけ（std1／elegant）。実物は16社42枚 在る＝ここが薄い★');
-  if (!N.見本が別の絵) note.push('★見本2枚が同じ絵＝様式が効いていない（見本が嘘）★');
+  if (N.紙の様式 < 3) note.push('★様式が3種に足りない（実物は47通・11通が控除型）★');
+  if (!N.見本が別の絵) note.push('★見本に 同じ絵が混ざっている＝様式が効いていない（見本が嘘）★');
 }
 
 /* ── ② 自社を入れる（紙に刷られる物） ── */
@@ -181,7 +183,7 @@ const NM = require_(path.join(ROOT, 'seikyu/lib/seikyu-name.js'));
 
 /* ── ⑧ 渡す ── */
 {
-  /* ★メールで送る口は Rakually に無い★（あるなら数える）
+  /* ★メールで送る口は Rakunally に無い★（あるなら数える）
      ★body.innerHTML を見ない★＝<script> の中身（app.js の source）まで入るので
      ★ソースにその字が在るだけで「在る」と数えてしまう★（2026-08-24 に実際に踏んだ）。
      ⇒ ★押せる物・リンクだけを見る★。 */

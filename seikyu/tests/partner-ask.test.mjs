@@ -214,13 +214,13 @@ T('⑨ ★画面そのものが対話★（別ウィザードを作らない・�
   console.log('     設定＋入力の2か所で同じ描き手／ぜんぶ見るは残す／答え終われば消える');
 });
 
-T('⑩ ★読ませる字は薄い黒・色は押せる物だけ★（全アプリの決まり）', () => {
+T('⑩ ★読ませる字は薄い黒・色は押せる物だけ★（★押す物は ここでは見ない★＝pask-color が実測する）', () => {
   const css = fs.readFileSync(path.join(ROOT, 'seikyu/css/app.css'), 'utf8');
   const block = css.slice(css.indexOf('.pask {'));
   ok(block.length > 200, '聞く形の見た目が入っていない');
   /* ★皮に在る色だけ★（勝手な緑を増やすと 3アプリでバラける＝前科）
      ＋★本文には色を足さない★＝読ませる字は 皮から受け継ぐ */
-  const skin = fs.readFileSync(path.join(ROOT, 'css/rakually-ui.css'), 'utf8');
+  const skin = fs.readFileSync(path.join(ROOT, 'css/rakunally-ui.css'), 'utf8');
   const inSkin = new Set((skin.match(/#[0-9A-Fa-f]{6}\b/g) || []).map((c) => c.toUpperCase()));
   const used = (block.match(/#[0-9A-Fa-f]{6}\b/g) || []).map((c) => c.toUpperCase());
   used.forEach((c) => ok(inSkin.has(c), '★皮に無い色 ' + c + ' を足している★'));
@@ -230,10 +230,17 @@ T('⑩ ★読ませる字は薄い黒・色は押せる物だけ★（全アプ�
      ★この画面は body の字の色が主色の緑（#2E7D54）★で、受け継いだ字が ★全部 緑★になっていた
      （押す物は受け継がず 真っ黒 rgb(0,0,0)）。＝★受け継ぐ★では決まりを守れない。
      使う黒は ★#333333★（司さんの決定・代行請求が本番へ入れた値／指示役 2026-08-18 裁定）。
-     ★2つの「薄い黒」を作らない★＝皮の側も同じ値にした（css/rakually-ui.css）。 */
+     ★2つの「薄い黒」を作らない★＝皮の側も同じ値にした（css/rakunally-ui.css）。 */
   const BLACK = '#333333';
-  ['.pask', '.pask-qt', '.pask-hint', '.pask-prog', '.pask-guess', '.pask-o', '.pask-c',
-    '.pask-skip', '.pask-d', '.pask-d-k', '.pask-d-v', '.pask-d-r', '.pask-fin', '.pask-note-in > div',
+  /* ★2026-08-29 ここから ボタンを外した★（司さん「なぜボタンに色をつけない？統一感は？」）
+     この一覧に ★.pask-o / .pask-c / .pask-skip★（＝押す物）を入れていたので、
+     ★ボタンにまで 薄い黒を強制していた★＝★色が付かなかった原因は この見張り★でした。
+     決まりは「★読ませる字は薄い黒・★色は押せる物だけ★★」＝
+     ★押す物は 色を持つのが 正しい★。
+     ⇒ 押す物の色は ★画面のボタン（.btn-primary / .btn-ghost）に任せる★。
+       ★本物のブラウザで 値を突き合わせる★のは seikyu/tests/pask-color.test.mjs。 */
+  ['.pask', '.pask-qt', '.pask-hint', '.pask-prog', '.pask-guess',
+    '.pask-d', '.pask-d-k', '.pask-d-v', '.pask-d-r', '.pask-fin', '.pask-note-in > div',
   ].forEach((sel) => {
     const esc2 = sel.replace(/[.>]/g, (c) => '\\' + c).replace(/ /g, '\\s*');
     const rule = (new RegExp(esc2 + '\\s*\\{([^}]*)\\}').exec(block) || [])[1] || '';
@@ -338,6 +345,36 @@ if (process.argv.includes('--self-test')) {
   console.log('\n自己確認: ' + sp + ' 通り 赤になった / ' + sf + ' 通り 効いていない');
   if (sf) process.exit(1);
 }
+
+/* ═══ ★敬称の自動判定★（司さん・指示役 ④の残り）═══════════════════
+   ★日本の紙の作法★＝御中 と 様 を 一緒に付けない（二重敬称）。
+   作法そのものは seikyu-doc.js の addresseeOf が 1か所で持つ（紙と ここで 別々に持たない）。 */
+const DOC2 = require_(path.join(HERE, '..', 'lib', 'seikyu-doc.js'));
+
+T('★⑫ 担当者が居たら 会社行に 敬称を付けない（御中＋様＝二重敬称）', () => {
+  const g = ASK.honorGuess('○○建設株式会社', [], '山田');
+  ok(g, '当てていない');
+  eq(g.value, '（なし）', '★担当者が居るのに 御中を当てている★');
+  ok(/二重敬称/.test(g.why), '★理由を 言っていない★「' + g.why + '」');
+  console.log('     ' + g.why);
+});
+
+T('★⑬ 担当者が居なければ 今まで通り（会社名＝御中／人＝様）', () => {
+  eq(ASK.honorGuess('○○建設株式会社', []).value, '御中', '会社に 御中を 当てていない');
+  eq(ASK.honorGuess('山田太郎', []).value, '様', '人に 様を 当てていない');
+});
+
+T('★⑭ あて名の作法が 1か所（紙も 聞く形も 同じ関数を 通す）', () => {
+  const a = DOC2.addresseeOf({ name: '○○建設株式会社', honor: '御中', person: '山田' });
+  eq(a.honor1, '', '★会社行に 敬称が 残っている★');
+  eq(a.line2 + '　' + a.honor2, '山田　様', '担当者の行');
+  const b = DOC2.addresseeOf({ name: '○○建設株式会社', honor: '御中' });
+  eq(b.honor1, '御中', '会社だけの時');
+  eq(b.line2, '', '担当者の行が 出ている');
+  const c = DOC2.addresseeOf({ name: '山田太郎', honor: '（なし）' });
+  eq(c.honor1, '', '「（なし）」を 敬称として 出している');
+  console.log('     担当者あり → ' + a.line1 + ' ／ ' + a.line2 + '　' + a.honor2);
+});
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

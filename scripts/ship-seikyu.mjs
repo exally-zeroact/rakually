@@ -47,7 +47,12 @@ const ENTRIES = ['seikyu/index.html', 'index.html'];
    ★見張りが「作ったが呼ばれていない台帳」として見ている★ので、置いていくと 台帳が空になって
    見張りが空振りする（2026-08-26 実測）。 */
 const GUARDS = ['seikyu', 'tests', 'scripts', '.github', 'package.json', 'tests-no-ci.json',
-  'vercel.json', '.gitattributes', '.gitignore', 'CLAUDE.md', 'sw.js', 'docs', 'supabase'];
+  'vercel.json', '.gitattributes', '.gitignore', 'CLAUDE.md', 'sw.js', 'docs', 'supabase',
+  /* ★押した時だけ読む物★＝自作PDFの道具と 字体（pdf-lib / fontkit / BIZ UDPGothic）。
+     ★数える道具（dep-count）は 見つけられない★＝押した時に 読むので 参照が 書いていない。
+     2026-08-31 実測：これが 抜けていて 本番で ★PDFが1枚も作れない★所だった
+     （seikyu/tests/dep-guard の「押した時だけ読む物」が 赤で 捕まえた）。 */
+  'vendor'];
 
 /* ★運び先に無いファイルを見に行く試験は 運ばない★（名前と 見に行った先を 全部 書き残す）
    ＝置いていくと「登録していない試験が在る」で見張りが赤くなり、
@@ -173,6 +178,15 @@ function count(root) {
   return all;
 }
 
+/* ★入口の js からも 給与への行き先を 外す★（請求書だけ出すので kyuyo/ は無い）
+   ＝タイルだけ外しても ★「← 給与へ戻る」の帰り道★が 残っていて 行き止まりになる
+   （2026-08-31 実測：運び先の screen-words が「画面に出る字に 給与」で 赤になって 捕まえた）。 */
+export function hubJsWithoutKyuyo(src) {
+  const re = new RegExp('\\n\\s*kyuyo:\\s*\\{[^}]*\\},?');
+  if (!re.test(src)) return { src: src, removed: 0 };
+  return { src: src.replace(re, ''), removed: 1 };
+}
+
 /* ★入口から 給与のタイルを外す★（請求書だけ出すので kyuyo/ は無い） */
 export function hubWithoutKyuyo(html) {
   const i = html.indexOf('<a class="tile" id="tile-payslip"');
@@ -243,7 +257,7 @@ function ciHeaderNote(yml, dropped) {
   const i = yml.indexOf(mark);
   if (i < 0) return yml;
   const lines = ['',
-    '# ★★ここは 本番 rakually（請求書だけ）★★ … 元は rakually-test の CI をそのまま運んだ物。',
+    '# ★★ここは 本番 rakunally（請求書だけ）★★ … 元は rakually-test の CI をそのまま運んだ物。',
     '#   scripts/ship-seikyu.mjs が ★運び先に無いファイルを指すステップだけ★ 外して作る。',
     '#   ★外した理由は1つだけ＝給与の画面(kyuyo/)を運んでいないから★（機能を削った訳ではない）。',
     '#   ★戻す条件★: 本番にも給与を出す日（＝10月の改名・URL切替の塊）。その時 一緒に戻す。',
@@ -254,9 +268,21 @@ function ciHeaderNote(yml, dropped) {
   return yml.slice(0, i) + lines.join('\n') + yml.slice(i);
 }
 
+/* ★運び先の物を 上書きしてはいけないファイル★
+   ＝倉庫の向き先（url / key / env）は ★配信ごとに違う★。
+   ★2026-08-31 実測：この道具は「書き換えません」と言いながら 本番の js/supa-config.js を
+     テストの値（env:'test'・DB-test）で 上書きしていた★。
+   ＝そのまま出していたら ★本番の請求書が テストの倉庫を見て、テスト帯まで出る★ 所だった。 */
+const KEEP_AT_DEST = ['js/supa-config.js'];
+let keptFiles = [];
+
 function copyOne(rel, to) {
   const src = path.join(ROOT, rel);
   const dst = path.join(to, rel);
+  if (KEEP_AT_DEST.indexOf(rel.split(path.sep).join('/')) >= 0) {
+    if (fs.existsSync(dst)) { keptFiles.push(rel); return; }   // 運び先の物を そのまま残す
+    throw new Error('★運び先に ' + rel + ' が 無い★（倉庫の向き先は 指示役が入れる物）');
+  }
   fs.mkdirSync(path.dirname(dst), { recursive: true });
   fs.copyFileSync(src, dst);
 }
@@ -299,6 +325,14 @@ function ship(to, dry) {
   if (!r.removed) { console.error('★入口から 給与のタイルを外せませんでした（作りが変わった）★'); return 1; }
   fs.writeFileSync(hub, r.html, 'utf8');
   console.log('★入口を作り替えた★ … 給与のタイルを 1個 外した');
+  /* ★入口の js からも 帰り道を 外す★（行き止まりを 作らない） */
+  const hubJs = path.join(to, 'js', 'hub.js');
+  if (fs.existsSync(hubJs)) {
+    const j = hubJsWithoutKyuyo(fs.readFileSync(hubJs, 'utf8'));
+    if (!j.removed) { console.error('★入口の js から 給与の帰り道を 外せませんでした（作りが変わった）★'); return 1; }
+    fs.writeFileSync(hubJs, j.src, 'utf8');
+    console.log('★入口の js も 作り替えた★ … 「← 給与へ戻る」を 1個 外した');
+  }
 
   /* ★運び先で走れない試験は 置いていかない★（名前と 見に行った先を 全部 出す）
      ＝自己診断では ここは飛ばす（全試験を2回 走らせると CI が重くなる）。
@@ -365,12 +399,32 @@ function ship(to, dry) {
     return 1;
   }
   console.log('\n★前と後で 同じ数（' + need.length + '本）／見つからない参照 0件★');
-  console.log('★次にやる事★ … 運び先で js/supa-config.js を 指示役の値に入れ替える（私は書きません）');
+  console.log('★運び先の物を 残したファイル★ … '
+    + (keptFiles.length ? keptFiles.join(' , ') : '★0件（＝上書きしている＝危ない）★'));
+  console.log('★次にやる事★ … 運び先の js/supa-config.js は 触っていません（指示役の値のまま）');
   return 0;
 }
 
 if (process.argv.includes('--self-test')) {
-  console.log('\n★自己診断★');
+    /* ★運び先の supa-config を 上書きしないか★（2026-08-31 実際に 上書きしていた） */
+  {
+    const t3 = fs.mkdtempSync(path.join(os.tmpdir(), 'ship-keep-'));
+    fs.mkdirSync(path.join(t3, 'js'), { recursive: true });
+    fs.writeFileSync(path.join(t3, 'js', 'supa-config.js'), '// 本番の物\nwindow.SUPA={env:\'prod\'};\n', 'utf8');
+    keptFiles = [];
+    copyOne(path.join('js', 'supa-config.js'), t3);
+    const after = fs.readFileSync(path.join(t3, 'js', 'supa-config.js'), 'utf8');
+    const ok = /env:'prod'/.test(after) && keptFiles.length === 1;
+    console.log('  ' + (ok ? '✓' : '✗') + ' ★運び先の js/supa-config.js を 上書きしない★');
+    if (!ok) { console.error('  ★上書きしている＝本番が テストの倉庫を見る★'); process.exit(1); }
+    /* 運び先に 無い時は 止まる（黙って テストの値を 置かない） */
+    const t4 = fs.mkdtempSync(path.join(os.tmpdir(), 'ship-keep2-'));
+    let threw = false;
+    try { copyOne(path.join('js', 'supa-config.js'), t4); } catch (e) { threw = true; }
+    console.log('  ' + (threw ? '✓' : '✗') + ' ★運び先に 向き先が 無い時は 止まる★');
+    if (!threw) process.exit(1);
+  }
+console.log('\n★自己診断★');
   let ng = 0;
   const must = (want, got, why) => {
     if (want !== got) { console.error('  ✗ ' + why + '（欲しい ' + want + ' / 出た ' + got + '）'); ng++; }
@@ -379,6 +433,15 @@ if (process.argv.includes('--self-test')) {
   const hub = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const r = hubWithoutKyuyo(hub);
   must(1, r.removed, '★入口から 給与のタイルを外せる★');
+  /* ★入口の js からも 帰り道を 外せるか★（2026-08-31 本番で 行き止まりになりかけた） */
+  {
+    const src0 = fs.readFileSync(path.join(ROOT, 'js', 'hub.js'), 'utf8');
+    const j = hubJsWithoutKyuyo(src0);
+    must(1, j.removed, '★入口の js から 給与の帰り道を 外せる★');
+    must(false, /給与へ戻る/.test(j.src), '外したあと 給与の帰り道が 残っていない');
+    must(true, /請求書へ戻る/.test(j.src), '★請求書の帰り道は 残っている★');
+    must(0, hubJsWithoutKyuyo(j.src).removed, '★もう無い時は 0を返す（黙って通さない）★');
+  }
   must(false, /id="tile-payslip"/.test(r.html), '外したあと 給与のタイルが残っていない');
   must(true, /id="tile-seikyu"/.test(r.html), '★請求書のタイルは 残っている★');
   must(false, /href="kyuyo\/"/.test(r.html), '★kyuyo\/ への行き先が 1つも残っていない★');
@@ -421,12 +484,22 @@ if (process.argv.includes('--self-test')) {
   /* ★数える所が 本当に効くか★＝運んでみて 前と後が同じ数になる */
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ship-'));
   try {
+    /* ★運び先には 倉庫の向き先が すでに在る★（本番も そう）＝ここでも 先に置く。
+       置かずに運ぼうとすると 止まる＝それが 正しい（上の自己診断で 確かめている）。 */
+    fs.mkdirSync(path.join(tmp, 'js'), { recursive: true });
+    fs.copyFileSync(path.join(ROOT, 'js', 'supa-config.js'), path.join(tmp, 'js', 'supa-config.js'));
     process.env.SHIP_FAST = '1';
     const code = ship(tmp, false);
     delete process.env.SHIP_FAST;
     must(0, code, '★運んで 前と後が 同じ数になる★');
     must(true, fs.existsSync(path.join(tmp, 'kyuyo/lib/shouhizei-ritsu.js')),
       '★法定の2本（消費税）も 一緒に運ばれている★');
+    /* ★押した時だけ読む物★（自作PDFの道具と字体）＝数える道具では 見つからない */
+    ['vendor/pdf-lib.min.js', 'vendor/fontkit.umd.min.js', 'vendor/fonts/BIZUDPGothic-Regular.ttf']
+      .forEach((f) => must(true, fs.existsSync(path.join(tmp, f)),
+        '★' + f + ' が 運ばれていない（押しても PDFが 作れない）★'));
+    must(false, /給与へ戻る/.test(fs.readFileSync(path.join(tmp, 'js', 'hub.js'), 'utf8')),
+      '★運んだ入口の js に 給与の帰り道が 残っている（行き止まり）★');
     must(true, fs.existsSync(path.join(tmp, 'kyuyo/lib/shiharai-chosho.js')),
       '★法定の2本（支払調書）も 一緒に運ばれている★');
     must(false, fs.existsSync(path.join(tmp, 'kyuyo/index.html')),

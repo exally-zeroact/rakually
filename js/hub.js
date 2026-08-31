@@ -89,6 +89,85 @@
     $('org-invoice').value = o.invoiceNo || '';
     torokuNote('org-invoice', 'org-invoice-note', ORG_NOTE);
     renderBizChips();
+    renderKaishaAsk();
+  }
+
+  /* ══ ★会社のことを 聞いてあげる★（司さん 2026-08-16 の決定を 入口にも）══════
+     ★別ウィザードを作らない★＝この画面のまま 1問だけ増やす／★1問ごと保存★／
+     ★答えたら その場で 結果を返す★／答え終われば ★自分で消える★。 */
+  var KASK = (typeof window !== 'undefined' && window.KaishaAsk) || null;
+  var kaishaAnswered = {};
+  function kaishaCtx() {
+    return { org: state.org || {}, businesses: state.businesses || [], answered: kaishaAnswered };
+  }
+  function renderKaishaAsk() {
+    var card = $('kaisha-ask-card'), host = $('kaisha-ask');
+    if (!card || !host || !KASK) return;
+    var pr = KASK.progress(kaishaCtx());
+    if (!pr.next) { card.style.display = 'none'; host.innerHTML = ''; return; }
+    card.style.display = '';
+    var q = pr.next;
+    var val = q.now || '';
+    host.innerHTML = '<p class="note" id="kask-prog">' + pr.total + '問のうち ' + pr.done + '問 答えました</p>'
+      + '<div class="fld"><label for="kask-t">' + esc(q.q) + '</label>'
+      + '<input id="kask-t" type="text" value="' + esc(val) + '" placeholder="' + esc(q.placeholder || '') + '">'
+      + '<p class="note">' + esc(q.hint || '') + '</p>'
+      + '<p class="note" id="kask-live"></p></div>'
+      + ((q.chips && q.chips.length)
+        ? '<div class="chips">' + q.chips.map(function (c) {
+          return '<button class="chip-btn" type="button" data-kask-chip="' + esc(c) + '">' + esc(c) + '</button>';
+        }).join('') + '</div>' : '')
+      + '<div class="acts"><button class="b1" type="button" data-kask-ok="' + esc(q.key) + '">これで</button>'
+      + '<button class="b2" type="button" data-kask-skip="' + esc(q.key) + '">' + esc(q.skipLabel || '飛ばす') + '</button></div>'
+      + '<div class="msg" id="kask-msg"></div>';
+    bindKaishaAsk();
+    kaishaLive();
+  }
+  function kaishaLive() {
+    var pr = KASK && KASK.progress(kaishaCtx());
+    var q = pr && pr.next; if (!q || !q.live) return;
+    var el = $('kask-t'), out = $('kask-live'); if (!el || !out) return;
+    out.textContent = q.live(el.value) || '';
+  }
+  function bindKaishaAsk() {
+    var host = $('kaisha-ask'); if (!host || host.dataset.bound) return;
+    host.dataset.bound = '1';
+    host.addEventListener('input', function (ev) {
+      if (ev.target && ev.target.id === 'kask-t') kaishaLive();
+    });
+    host.addEventListener('click', function (ev) {
+      var t = ev.target;
+      var chip = t.closest && t.closest('[data-kask-chip]');
+      if (chip) { var i = $('kask-t'); if (i) { i.value = chip.getAttribute('data-kask-chip'); i.focus(); kaishaLive(); } return; }
+      var okb = t.closest && t.closest('[data-kask-ok]');
+      if (okb) { return kaishaAnswer(okb.getAttribute('data-kask-ok'), ($('kask-t') && $('kask-t').value) || ''); }
+      var sk = t.closest && t.closest('[data-kask-skip]');
+      if (sk) { return kaishaAnswer(sk.getAttribute('data-kask-skip'), ''); }
+    });
+  }
+  /** ★1問ごと保存★＋★答えたら その場で 結果を返す★ */
+  function kaishaAnswer(key, val) {
+    var pr = KASK.progress(kaishaCtx());
+    var q = (pr.list.filter(function (x) { return x.key === key; })[0] || {}).q;
+    var said = q && q.result ? q.result(val) : '';
+    kaishaAnswered[key] = true;
+    var v = String(val == null ? '' : val).trim();
+    if (key === 'business') {
+      if (v && (state.businesses || []).indexOf(v) < 0) {
+        state.businesses.push(v);
+        renderBizChips(); fillEmpBizOptions();
+        saveOrgBusinesses();
+      }
+      renderKaishaAsk();
+      if (said) msg('kask-msg', said);
+      return Promise.resolve();
+    }
+    var id = { yago: 'org-yago', addr: 'org-addr', invoiceNo: 'org-invoice' }[key];
+    if (id && $(id)) $(id).value = v;
+    var p = saveOrg();
+    renderKaishaAsk();
+    if (said) msg('kask-msg', said);
+    return p;
   }
   function renderBizChips() {
     var host = $('org-biz-chips'); if (!host) return;
@@ -268,9 +347,9 @@
   }
 
   /* ★2026-08-18 集計(E5)と日次台帳(E2)は この入口から外した★（司さん「ささっと Exally から切り離せ」）
-     ・どちらも Exally の物。Rakually の入口が出す物は ★給与／請求書／共有データ★ の3つ。
+     ・どちらも Exally の物。Rakunally の入口が出す物は ★給与／請求書／共有データ★ の3つ。
      ・外したのは renderAgg / paintAgg / renderCross / paintCross と その繋ぎ（121行）。
-     ・戻す条件＝Rakually に台帳/集計を置くと決めた日（git に残っている）。 */
+     ・戻す条件＝Rakunally に台帳/集計を置くと決めた日（git に残っている）。 */
 
   /* ═══ 読み込み ═══ */
   function loadPartners() {
@@ -333,11 +412,46 @@
   }
 
   /* ═══ 起動 ═══ */
+  /* ═══ ★会社の設定（第3の場所）★（司さん 2026-08-28）═══════════════════════
+     ★決めた事★
+       会社の情報（屋号・住所・電話・インボイス番号・事業）は
+       ★給与でも 請求書でもない ここ★ が持ち主。★2か所で別々に持たない★。
+     ★なぜ 新しい画面を作らなかったか★
+       ここに ★もう在る★（共有データ ▸ 会社）。★同じ物を3枚目として作らない★
+       （作る前に skill find-existing を回す決まり）。足したのは ★行き方と 帰り道★だけ。
+     ★行き方★ index.html#kaisha … 開いた時に 共有データ▸会社 を出す
+       戻り先つき … #kaisha?back=seikyu ／ #kaisha?back=kyuyo
+     ★帰り道★ 上に「← 請求書へ戻る」を出す（★飛んだ先から 元の画面へ戻れる★）。 */
+  var BACK_TO = {
+    seikyu: { label: '← 請求書へ戻る', href: 'seikyu/' },
+  };
+  function openFromHash() {
+    var h = String(location.hash || '').replace(/^#/, '');
+    if (!h) return false;
+    var name = h.split('?')[0];
+    if (name !== 'kaisha') return false;
+    var q = h.indexOf('?') >= 0 ? h.slice(h.indexOf('?') + 1) : '';
+    var back = (q.split('&').map(function (kv) { return kv.split('='); })
+      .filter(function (kv) { return kv[0] === 'back'; })[0] || [])[1] || '';
+    show('scr-data'); showTab('org');
+    showBack(BACK_TO[back] || null);
+    return true;
+  }
+  function showBack(to) {
+    var el = $('kaisha-back'); if (!el) return;
+    if (!to) { el.hidden = true; el.textContent = ''; el.removeAttribute('href'); return; }
+    el.hidden = false;
+    el.textContent = to.label;
+    el.setAttribute('href', to.href);
+  }
+
   function init() {
     // ★state.today は入れない＝毎回その時の日付を使う(アプリを開きっぱなしで日が変わっても「今月」がズレない)。
     //   テストだけ state.today に固定値を入れて時刻依存を外す。
     bind();
     renderEmps(); renderPts(); renderBizChips();
+    openFromHash();
+    global.addEventListener('hashchange', openFromHash);
   }
 
   // auth.js がログイン成功後に呼ぶ（会社・人・取引先を読む）
@@ -357,14 +471,17 @@
 
   var Hub = {
     init: init, attach: attach, show: show, showTab: showTab,
+    openFromHash: openFromHash, showBack: showBack, BACK_TO: BACK_TO,
     loadAll: loadAll,
     state: state,
     _setSuiteData: function (sd) { SD = sd; },     // テスト用の差し込み口
+    _fillOrg: fillOrg,                             // テスト用: 会社の画面を描き直す
+    _kaishaAnswer: function (k, v) { return kaishaAnswer(k, v); },  // テスト用: 聞く形に答える
     _toast: toast, _jpFail: jpFail,
     _modal: modal, _modalClose: modalClose
   };
   global.Hub = Hub;
-  global.__RAKUALLY_TEST = Hub;                       // ★UIテスト(jsdom/実機)から中を見る
+  global.__RAKUNALLY_TEST = Hub;                       // ★UIテスト(jsdom/実機)から中を見る
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

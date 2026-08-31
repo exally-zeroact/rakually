@@ -16,7 +16,7 @@
  *   ・お振込先・備考も ★囲まない★。囲みが増えるほど、どこを読めばよいか分からなくなる。
  *   ・明細は ★縦の罫を引かず、横の細い罫だけ★。列を会社が足せるので、
  *     縦罫があると列を増やすたびに紙が檻のようになる。
- *   ・色は Exally／Kyually と同じ緑（css/rakually-ui.css と同じ13色から）。
+ *   ・色は Exally／Kyually と同じ緑（css/rakunally-ui.css と同じ13色から）。
  *     ※代行請求（ダイコメの製品）は今 事務所の青(#007AFF)ですが、それは別の家の色です。
  *
  * ★税率の数字を1つも書かない★（区分は seikyu-tax.js が出した物を並べるだけ）
@@ -67,6 +67,9 @@
      ★数字の右端が表ごとに違う位置★に来ていた。ここで1つに決める。 */
   var EDGE = '1.2mm';
   var ROW_H = '6.3mm';
+  /* ★あて名の下と「◯月分」の間の余白（mm）★＝★元の紙と同じ数★（実測 15.3mm）
+     ここを 0にしてしまい 司さんに 差し戻された（2026-08-31）。★言われていない所は 変えない★ */
+  var MID_PAD_MM = 15.3;
   var ROW_PAD = '0.9mm 1.2mm';
   var ROW_LH = '1.35';
   /* ★A4 1枚に載る行数★（★実測して決めた数★）
@@ -86,6 +89,14 @@
        → 21/11（振込先の名義を次の行に）→ 21/10（箱に字の余白）
        → 19/9（頭の並びを どの紙も同じにした＝挨拶と ページ番号が明細の上に来た）
        → ★18/8（振込先の高さを 3行ぶんで固定＝名義が長い会社でも 行数が変わらない）★
+       ★2026-08-31 自社の塊を「ご請求金額」と 下そろえにした日★
+         ・一度 20/10 に上げたが ★上げた理由は 私が 余白を詰めたから★で、
+           司さんに 差し戻された（「赤丸合わせろ ってゆうただけ」）。
+         ・余白を 元に戻したので ★数も 元のまま 18/8★（表の始まりは 79.9mm で 元と同じ）
+         ・測り直し（★元と同じ engine＝Chromium★）… 18行=余り0px／19行で +1px はみ出し
+           控除あり 8行=余り0px／9行で +14px
+         ★WebKitで測ると 19行に見えた★＝engine が違うと 数も違う。
+           ★台帳の数を 直す時は 元と同じ engine で 測る★（物差しを 先に そろえる）
          ・1枚物 … 控除あり ★9行★／控除なし ★19行★（実測・余り0px）
          ・複数ページの最後の紙は もう少し入るが、★1枚物に合わせる★（毎月おなじ顔）
 
@@ -119,6 +130,12 @@
     rule: 'rows',
     titleSpacing: '.32em',
     grandGo: 'ご',        // 「ご請求金額（税込）」（様式で「御」にもできる）
+    /* ★件名を紙に出すか★（司さん 2026-08-29「件名がいる会社もあるやろうから対応させとけ」）
+       ★既定は false（出さない）★＝★うちの実物45通（16社）は 件名の欄が0通★（機械で数えた）。
+       ★法律の要件でもない★（適格請求書の記載事項6つに 件名は無い／国税庁 No.6625）。
+       ⇒ ★要る会社は 設定で出す★（カスタム性の決まり＝焼き付けてよいのは法律だけ）。
+       ★世の中で多いか少ないかは まだ測っていない★＝測ったら 既定を見直す。 */
+    subjectOn: false,
   };
   function themeOf(t) { return Object.assign({}, THEME, t || {}); }
 
@@ -148,10 +165,14 @@
 
   /* ★紙の金額は ¥ 記号（画面は「1,100 円」。二重に付けない）★
      数にならない物は 0 にしない（取れなかったを 0 と作り分ける）。 */
+  /* ★¥記号を付けるか★は 会社が選べる（焼き付けない・既定は付ける）
+     実物は ★型A 4通は付く／型B 7通は付かない★（2026-08-28 実測）。
+     ★数そのものは 1円も変わらない★＝見た目だけの話。 */
+  var YEN_ON = true;
   function yen(v) {
     var n = Number(v);
     if (!Number.isFinite(n)) return '—';
-    return '¥' + Math.round(n).toLocaleString('ja-JP');
+    return (YEN_ON ? '¥' : '') + Math.round(n).toLocaleString('ja-JP');
   }
   /* 表の中の数（¥ を付けない・桁区切りだけ。桁が詰まって読みにくくなるため） */
   function comma(v) {
@@ -199,8 +220,55 @@
   /* 角印の大きさ（mm）。10〜40に収める＝紙からはみ出す印を作らない */
   function sealMm(v) {
     var n = Number(v);
-    if (!Number.isFinite(n)) return 21;
+    if (!Number.isFinite(n)) return 17;
     return Math.max(10, Math.min(40, Math.round(n)));
+  }
+  /* ★印の場所は 紙の上のどこでもよい★
+     （司さん 2026-08-31「そこも違うかないか？ 場所は自由に変えれんのか？」）
+     ・sealX / sealY が 入っていれば ★紙の左上から その mm の所★に 押す
+     ・入っていなければ ★今までの場所★（社名に重ねる）＝黙って 見た目を 変えない
+     ★紙から出ない★のは seikyu-doc.sealXY が 収めている（ここは 置くだけ）。
+     ★どの紙にも 同じ所に押す★（2枚以上でも 場所は 動かない）。 */
+  var PAPER_W_MM = 210, PAPER_H_MM = 297;
+  function sealFree(g) {
+    var x = (g && g.sealX), y = (g && g.sealY);
+    if (typeof x !== 'number' || typeof y !== 'number') return null;
+    /* ★紙から出さない蓋は 紙の側にも 置く★（2026-08-31 実測で 抜けていた）
+       ＝決まり（seikyu-doc.sealXY）を 通らずに 紙を作る道が 在る（試験・別の呼び方）。
+         ★片方だけの蓋は 蓋ではない★＝999mm と渡されたら 紙の外へ出ていた。 */
+    var mm = sealMm(g.sealSizeMm);
+    var cl = function (v, max) { return Math.max(0, Math.min(max - mm, v)); };
+    return { x: cl(x, PAPER_W_MM), y: cl(y, PAPER_H_MM) };
+  }
+  /* ★印が 自社の塊より 下へ はみ出す量（mm）★
+     ＝印は 社名の行の 真ん中に 重ねるので、★社名の下に 行が少ないほど 下へ はみ出す★。
+     （司さん 2026-08-31「分かったんなら 最初からやれや」＝1行だけの会社で
+       印が 明細の表に 1.6mm かかっていた・実測）
+     字の大きさは この紙の CSS と 同じ数を 使う（2つの正を 作らない）:
+       社名 11pt × 行送り1.45 ／ 住所・TEL・登録番号 9pt × 行送り1.45 ／ 1pt = 0.3528mm */
+  var PT_MM = 0.3528;
+  var NAME_LH_MM = 11 * 1.45 * PT_MM;      // 社名の行の高さ
+  var SUB_LH_MM = 9 * 1.45 * PT_MM;        // その下の行の高さ
+  function sealOverflowMm(g) {
+    var mm = sealMm(g.sealSizeMm);
+    var lines = 1
+      + (textOf(g.addr) ? 1 : 0)
+      + (textOf(g.tel) ? 1 : 0)
+      + (textOf(g.invoiceNo) ? 1 : 0);
+    /* 印の下端 − 社名の行の下端 − 社名より下に在る行の高さ */
+    var over = (mm / 2 - NAME_LH_MM / 2) - (lines - 1) * SUB_LH_MM;
+    return Math.max(0, Math.round(over * 10) / 10);
+  }
+  function sealStyle(g) {
+    var mm = sealMm(g.sealSizeMm);
+    var f = sealFree(g);
+    var size = 'width:' + mm + 'mm;height:' + mm + 'mm;';
+    /* ★自由な場所★＝紙（.sheet）の左上から。紙の余白の中でも外でも 置ける。 */
+    if (f) return size + 'left:' + f.x + 'mm;top:' + f.y + 'mm;right:auto;bottom:auto;';
+    /* ★今までの場所★＝社名の行の右端に 重ねる（縦は 行の真ん中）。
+       ★はみ出す時だけ その分 上へ★＝明細の表に かからない（4行の会社では 0mm＝今までのまま）。 */
+    var up = sealOverflowMm(g);
+    return size + 'right:0;top:50%;' + (up ? 'margin-top:-' + up + 'mm;' : '');
   }
 
   function hasRole(items, role) {
@@ -377,25 +445,43 @@
     var tax = o.tax || {};
     var p = o.partner || {};
     var g = o.org || {};
-    var TH = themeOf(o.theme);
+    /* ★紙の書き方は 会社が選べる★（2026-08-28 指示役「カスタム性」）
+       ★順番★ … ①その1通が持つ物（inv.data.style）→②会社が決めた物（o.style）→③様式の既定（theme）
+       ★焼き付けてよいのは 法律だけ★＝ここに来る物は 全部 見た目と言い方の話。 */
+    var TH = themeOf(Object.assign({}, o.theme || {}, o.style || {}, (inv.data && inv.data.style) || {}));
+    /* ★¥記号★ … 数は1円も変わらない（見た目だけ）。既定は付ける。 */
+    YEN_ON = (TH.yenMark === false) ? false : true;
     var era = o.era || (inv.data && inv.data.dateEra) || 'seireki';
 
     var spec = COLS.normalizeSpec((o.cols && o.cols.items && o.cols.items.length) ? o.cols : DEFAULT_COLS);
     if (COLS.validate(spec.items).length) spec = COLS.normalizeSpec(DEFAULT_COLS);
     var colW = COLS.widthsOf(spec.items, spec.widths);
 
-    /* ★紙の種類は3つ★ 請求書／見積書／★領収書★
-       領収書は doc_type ではない（棚を増やさない）＝入金1行から出す紙なので、
-       ★呼ぶ側が docKind:'receipt' と receipt:{…} を渡す★。 */
+    /* ★紙の種類は4つ★ 請求書／見積書／★領収書★／★納品書★
+       領収書と納品書は doc_type ではない（★棚を増やさない★）＝
+       ・領収書 … 入金1行から出す紙（呼ぶ側が docKind:'receipt' と receipt:{…} を渡す）
+       ・納品書 … ★同じ1通を「品物を納めた証」として出す紙★（docKind:'delivery'）
+         ★司さん 2026-08-30「競合が当たり前にしてる事は こちらも当たり前にしてな」★
+         ＝Misoca も freee も「見積→納品→請求→領収」を1押しで出せる。うちに 納品書だけ 無かった。
+         ★納品書は 支払いの依頼ではない★ので ★お振込先と お支払期限を 出さない★
+         （出すと「これで払え」の紙になり、後から出す請求書と 二重請求に見える）。 */
     var rc = o.receipt || null;
     var kind = o.docKind || (inv.doc_type === 'quote' ? 'quote' : 'invoice');
     if (kind === 'receipt' && !rc) kind = 'invoice';        // 中身が無いのに領収書の顔をしない
     var isQuote = (kind === 'quote');
     var isReceipt = (kind === 'receipt');
-    var heading = isReceipt ? '領　収　書' : isQuote ? '見　積　書' : '請　求　書';
+    var isDelivery = (kind === 'delivery');
+    var heading = isReceipt ? '領　収　書' : isDelivery ? '納　品　書'
+      : isQuote ? '見　積　書' : '請　求　書';
     /* 金額のラベルは様式が持つ（ご／御）。★どちらでもよい＝縛らない★ */
     var go = TH.grandGo || 'ご';
-    var grandLabel = isReceipt ? '領収金額（税込）' : go + (isQuote ? '見積金額（税込）' : '請求金額（税込）');
+    /* ★「（税込）」を付けるか★（会社が選べる・焼き付けない／既定は付ける）
+       ★根拠★ 国税庁の記載事項は「税抜価額 又は 税込価額」＝どちらでもよい。
+       ★どちらの額かが 読む人に分かる★ので 既定は「付ける」。 */
+    var zk = (TH.zeikomiTag === false) ? '' : '（税込）';
+    var grandLabel = isReceipt ? ('領収金額' + zk)
+      : isDelivery ? ('納品金額' + zk)          // ★「ご請求」と書かない＝払えの紙ではない★
+        : go + (isQuote ? ('見積金額' + zk) : ('請求金額' + zk));
     var noLabel = 'No.　';
     var headNo = isReceipt ? String((rc && rc.no) || '') : (inv.no || '');
     var docTitle = (o.title || (heading.replace(/　/g, '') + (headNo ? ' ' + headNo : '')));
@@ -529,35 +615,66 @@
     }
 
     /* ── 頭（宛名・自社・日付） ★ラベルの後ろは全角スペース★ ── */
-    function headBlock(pageIdx) {
+    /* ★自社の塊は「ご請求金額」と 下をそろえる★
+       （司さん 2026-08-31「バランス考えたら この赤丸の高さを 下同士で合わせるやろがぼけ」
+                        「代行請求書と一緒で 下にせんのか」）
+       ★やり方＝同じ表の中に入れて 縦を「下寄せ」にする★（rowspan＝2段ぶんの高さを持たせる）
+         ・固定の mm で 下げるのは ★合わない紙が出る★（繰越が入ると 金額が1行 伸びる）
+         ・表で組めば ★中身が伸びても 下は いつも そろう★
+       ★頭は 低くなる★＝自社(19.4mm)が あて名(7.2mm)の高さを 決めていたのを やめるので、
+         明細に使える高さが 増える（★行数は 測り直す★）。 */
+    function headBlock(pageIdx, midHtml) {
       /* 並びは 請求日 → No. → お支払期限。
          ★番号は空でも欄を出す（「（未採番）」と書く）＝取れなかったを空欄にしない★ */
       /* 領収書は ★入金日★ が日付・★領収番号（請求番号＋枝番）★ が番号 */
       var ds = dateStr(isReceipt ? (rc && rc.ymd) : inv.issue_ymd, era);
-      var dLabel = isReceipt ? '領収日　' : isQuote ? '見積日　' : '請求日　';
+      var dLabel = isReceipt ? '領収日　' : isDelivery ? '納品日　' : isQuote ? '見積日　' : '請求日　';
       var meta = '<div class="meta-l">' + dLabel + (ds || '（未入力）') + '</div>';
       meta += '<div class="meta-l">' + esc(noLabel) + (esc(headNo) || '（未採番）') + '</div>';
       // ★もう受け取った紙に「お支払期限」を出さない★
-      if (!isReceipt && inv.due_ymd) meta += '<div class="meta-l">お支払期限　' + dateStr(inv.due_ymd, era) + '</div>';
+      /* ★納品書に お支払期限を 出さない★（支払いの依頼ではない） */
+      if (!isReceipt && !isDelivery && inv.due_ymd) meta += '<div class="meta-l">お支払期限　' + dateStr(inv.due_ymd, era) + '</div>';
 
       return '<h1 class="ttl">' + heading + '</h1>'
         + '<div class="meta">' + meta + '</div>'
         + '<table class="party"><tbody><tr>'
         + '<td class="party-to">'
-        + '<div class="to-name">' + (esc(p.name) || '（取引先が未選択）') + (honorOf(p) ? '　' + esc(honorOf(p)) : '') + '</div>'
-        + (p.person ? '<div class="to-sub">' + esc(p.person) + '　様</div>' : '')
+        /* ★あて名の作法は DOC が 1か所で持つ★（紙と 聞く形で 別の作法を持たない）
+           ★担当者が居る時は 会社行に 御中を付けない★＝二重敬称（御中＋様）を作らない */
+        + (function () {
+          var ad = DOC.addresseeOf(p);
+          return '<div class="to-name">' + (esc(ad.line1) || '（取引先が未選択）')
+            + (ad.honor1 ? '　' + esc(ad.honor1) : '') + '</div>'
+            + (ad.line2 ? '<div class="to-sub">' + esc(ad.line2)
+              + (ad.honor2 ? '　' + esc(ad.honor2) : '') + '</div>' : '');
+        }())
+        /* ★件名★（出す会社だけ・宛名のすぐ下）。空なら 出さない（空の見出しを刷らない）。 */
+        + ((TH.subjectOn && inv.data && inv.data.subject)
+          ? '<div class="to-subject">件名　' + esc(inv.data.subject) + '</div>' : '')
         /* ★宛先の下に住所は出さない★（司さん 2026-08-16「要らんくないか？」）
            ・実物32枚とも ★0枚★（機械で数えた）
            ・適格請求書の記載事項は ★受け取る側の「名称」★ まで＝住所は要らない
            ★データは消していない★（取引先マスタの住所はそのまま。必要になれば戻せる） */
         + '</td>'
-        + '<td class="party-from">'
-        + '<div class="from-name">' + (esc(g.yago) || '（自社情報が未入力）') + '</div>'
+        + '<td class="party-from" rowspan="2"><div class="from-box">'
+        /* ★角印は 社名の1行目の右端に 重ねて押す＝角印標準★
+           （司さん 2026-08-30「なんで角印の場所がそこなんど 請求書アプリ見てこい」）
+           ★直す前★は 登録番号の下に ぶら下げていた＝ハンコが 宙に浮いていた。
+           ★見本＝代行請求 invoice-pdf.js:760「判子（社名＝1行目の右端に"重ねて"押す＝角印標準）」★
+           うちの自社情報は 右揃えなので、社名の右端＝この箱の右端。そこへ 重ねる。 */
+        /* ★自由な場所の印は ここに入れない★＝紙（.sheet）に 直に貼る。
+           ここへ入れると ★自社の箱が 基準になり★、紙の左上からの mm が 狂う
+           （2026-08-31 実測：自社の塊を 下げた日に そうなった）。 */
+        + '<div class="from-name">' + (esc(g.yago) || '（自社情報が未入力）')
+        + ((g.sealDataUrl && !sealFree(g))
+          ? '<img class="seal" style="' + sealStyle(g) + '" src="' + esc(g.sealDataUrl) + '" alt="">' : '')
+        + '</div>'
         + (g.addr ? '<div class="from-sub">' + esc(g.addr) + '</div>' : '')
         + (g.tel ? '<div class="from-sub">TEL ' + esc(g.tel) + '</div>' : '')
         + (g.invoiceNo ? '<div class="from-sub">登録番号 ' + esc(g.invoiceNo) + '</div>' : '')
-        + (g.sealDataUrl ? '<img class="seal" style="width:' + sealMm(g.sealSizeMm) + 'mm;height:' + sealMm(g.sealSizeMm) + 'mm" src="' + esc(g.sealDataUrl) + '" alt="会社の印">' : '')
-        + '</td></tr></tbody></table>'
+        + '</div></td></tr>'
+        + '<tr><td class="party-mid">' + (midHtml || '') + '</td></tr>'
+        + '</tbody></table>'
         /* ★何枚のうちの何枚目か★（司さん 2026-08-16「複数ページになったらどうするんど」）
            「2ページ目」だけだと ★全部で何枚か分からない＝1枚 抜けても気づけない★。
            見本＝代行請求 invoice-pdf.js:748 も ★"1 / 3" を出している★。 */
@@ -581,7 +698,16 @@
     }
     function greetBlock() {
       var greet = isQuote ? '下記の通り御見積申し上げます。' : '下記の通り御請求申し上げます。';
-      return '<div class="lead lead-greet"><div class="lead-l"><span class="lead-g">' + greet + '</span></div></div>';
+      /* ★消費税の一言★（会社が選べる・焼き付けない／既定は出さない）
+         ★根拠★ 適格請求書の記載事項（国税庁 No.6625）に この文は入っていない＝法律の要件ではない。
+         うちの実物には47通とも在るが ★うちの実物は「正」ではなく1例★なので 既定にはしない。
+         ★言い方も会社が決める★（実物は「となっております」36通／「とします」11通に割れている）。 */
+      var note = textOf(TH.taxNote);
+      var noteHtml = note
+        ? '<div class="lead lead-greet"><div class="lead-l"><span class="lead-g">' + esc(note) + '</span></div></div>'
+        : '';
+      return noteHtml
+        + '<div class="lead lead-greet"><div class="lead-l"><span class="lead-g">' + greet + '</span></div></div>';
     }
     /* ★何枚のうち何枚目か★（1枚で収まる紙には出さない） */
     function pagenoBlock(pageIdx) {
@@ -633,6 +759,31 @@
            ★−28px はみ出した★（明細4枚以上で必ず起きる）。この書き方なら 何枚でも2行。 */
       var rows = [];
       var allPfx = multi ? '全ページの ' : '';
+      /* ★締めの並びは 2通り在る★（実物11通を1通ずつ突き合わせて分かった・2026-08-28）
+           A … 明細の合計（税抜）→ 消費税 → 合計（税込）   ← 4通
+           B … 消費税 → ★小計（税込）★                    ← 7通（税抜の行を出さない）
+         ★計算は どちらも同じ（外税・税抜×10%）★＝違うのは ★並びと言い方だけ★。
+         ★同じ「小計」が 型Aでは税抜・型Bでは税込を指す★ので ★言葉を焼き付けない★。 */
+      if (TH.sumsOrder === 'B') {
+        rows.push(['', allPfx + taxLabel(tax, inv.tax_mode), yen(tax.taxTotal)]);
+        rows.push(['sums-mid', textOf(TH.sumsTotalLabel) || '小計', yen(tax.grandTotal)]);
+        var hasDedB = showDeduct && (deduct === null || Number(deduct) !== 0);
+        if (hasDedB) {
+          var netB = (deduct === null) ? null : (tax.grandTotal - deduct);
+          /* ★控除に マイナスを付けない★（司さん 2026-08-31
+             「控除で引くもの分かっとんのに マイナス表記にすんなや」）
+             ＝「控除」と書いてある行の額は 引く物と 分かる。★源泉は 言われていないので そのまま★ */
+          rows.push(['sums-minus', textOf(TH.dedSum) || '控除', (deduct === null) ? '（未確認）' : yen(deduct)]);
+          rows.push(['', textOf(TH.finalLabel) || '合計', (netB === null ? '（未確認）' : yen(netB))]);
+        }
+        if (gen && gen.on) {
+          var payB = DOC.payableOf(tax, carry, gen, deduct);
+          rows.push(['sums-minus', esc(gen.label), '-' + yen(gen.amount)]);
+          rows.push(['', esc(gen.netLabel), (payB === null ? '（未確認）' : yen(payB))]);
+        }
+        rows[rows.length - 1][0] = 'sums-net';
+        return rows;
+      }
       /* ★税込で打つ紙は ここが「税抜」★＝表の中の「（税込）」と同じ言葉にしない。
          同じ「明細の合計」で 62,000 と 56,364 が並ぶと、必ず「なぜ？」になる。 */
       rows.push(['', allPfx + '明細の合計' + (inclusive ? '（税抜）' : ''), yen(tax.subtotal)]);
@@ -641,7 +792,7 @@
       var hasRealDeduct = showDeduct && (deduct === null || Number(deduct) !== 0);
       if (hasRealDeduct) {
         var billedNet = (deduct === null) ? null : (tax.grandTotal - deduct);
-        rows.push(['sums-minus', '控除', (deduct === null) ? '（未確認）' : '-' + yen(deduct)]);
+        rows.push(['sums-minus', '控除', (deduct === null) ? '（未確認）' : yen(deduct)]);
         rows.push(['', '請求額', (billedNet === null ? '（未確認）' : yen(billedNet))]);
       }
       if (gen && gen.on) {
@@ -717,7 +868,7 @@
 
     /* ── ★② 差し引く（控除）★ ────────────────────────────────
        ★①の明細と はっきり別の枠★（見出し・罫線で分ける）。
-       ★給料明細の「支給／控除／差引支給額」と同じ並び★＝Rakually の中で紙の作法をそろえる。
+       ★給料明細の「支給／控除／差引支給額」と同じ並び★＝Rakunally の中で紙の作法をそろえる。
        ★税の外で引く★（①の中のマイナス行＝値引きは税の中なので、こちらに混ぜない）。
        ★中身が1行でも枠は固定★（実物 八木工業は E17:H20＝4行のうち1行しか使っていない）。 */
     /* ★給料明細と同じ作法★（kyuyo/js/render.js を読んで合わせた・2026-08-15）
@@ -737,17 +888,22 @@
       var rows = deductLines.map(function (d) {
         var dv = Number(d && d.amount);
         return '<tr><th>' + (esc(d && d.name) || '控除') + '</th><td>'
-          + (Number.isFinite(dv) ? '-' + yen(dv) : '（未確認）') + '</td></tr>';
+          + (Number.isFinite(dv) ? yen(dv) : '（未確認）') + '</td></tr>';
       }).join('');
       var blanks = Math.max(0, dedRows - used);
       for (var i = 0; i < blanks; i++) rows += '<tr class="r-blank"><th>&nbsp;</th><td>&nbsp;</td></tr>';
       /* ★このブロックの合計はこのブロックが持つ★（給料明細の「控除合計」と同じ）。
          締めの「請求額」とは役目が違う（ブロックの足し算／払う額）。 */
-      return '<div class="blk blk-ded">' + blockHead('控除')
+      /* ★呼び名は焼き付けない★（指示役の裁定 2026-08-27）
+         実物は ★同じ相手・同じ年でも 中計7通／小計4通に割れている★＝機械では決められない。
+         ⇒ ①その1通が持つ物 → ②会社が決めた物 → ③様式の既定 → ④今までの言い方 の順で決める。 */
+      var dHead = textOf((inv.data && inv.data.dedHeadLabel) || o.dedHeadLabel || TH.dedHead) || '控除';
+      var dSum = textOf((inv.data && inv.data.dedSumLabel) || o.dedSumLabel || TH.dedSum) || '控除計';
+      return '<div class="blk blk-ded">' + blockHead(dHead)
         + '<table class="ded"><tbody>'
         + '<tr class="ded-hd"><th>内容</th><td>金額</td></tr>'
         + rows + '</tbody></table>'
-        + blockSum('控除計', (deduct === null) ? '（未確認）' : (deduct ? '-' + yen(deduct) : yen(0)))
+        + blockSum(dSum, (deduct === null) ? '（未確認）' : yen(deduct))
         + '</div>';
     }
 
@@ -757,14 +913,21 @@
     /* ★口座番号だけ 大きく・等幅★（読み間違いが一番 困る所）
        分け方（何行に分けるか）は ★bankLines が唯一の正★＝紙も Excel も同じ形にする。 */
     function bankHtml(bank) {
-      return bankLines(bank).map(function (line, i) {
+      var parts = bankLines(bank);
+      /* ★1行で出す様式★（実物の控除型は 11通とも 振込先が1行）＝様式が決める・焼き付けない */
+      if (TH.bankOneLine) {
+        var one = esc(parts.join(' ')).replace(/(\d{5,8})/g, '<span class="bank-no">$1</span>');
+        return one;
+      }
+      return parts.map(function (line, i) {
         var t = esc(line).replace(/(\d{5,8})/g, '<span class="bank-no">$1</span>');
         return (i === 0) ? t : '<span class="bank-nm">' + t + '</span>';
       }).join('<br>');
     }
     function footerBlock() {
       var left = '';
-      var bank = textOf(g.bank);
+      /* ★納品書には お振込先を 出さない★（払えの紙ではない＝二重請求に見える） */
+      var bank = isDelivery ? '' : textOf(g.bank);
       /* ★⑧ 客が一番 使う情報＝ここへ振り込む★（司さん 2026-08-16）
          枠で囲って薄く塗る（★白黒コピーでも枠は残る濃さ★）。 */
       if (bank) left += '<div class="note note-bank"><div class="note-h">お振込先</div>'
@@ -781,8 +944,13 @@
         + '</tr></tbody></table>';
     }
 
-    var subject = (inv.data && inv.data.subject) || '';
-    var caption = subject || (inv.data && inv.data.tableTitle) || '';
+    /* ★2026-08-29 死んでいた2行を 消した★（司さん「件名はどこにでる？」で見つかった）
+       `subject` / `caption` は ★作るだけで 誰も使っていなかった★＝
+       「紙に件名を出すつもりだった跡」が 残ったまま だった。
+       ★実測★ 3様式(std1/elegant/koujo)とも 紙に件名が出た回数 ★0回★。
+       ★残すと「出るはず」と読める★ので 消す。
+       ★紙に出すと決めた日★は、ここに ★様式ごとの置き場★として 作り直す
+       （うちの実物45通は 件名の欄が無い＝既定は「出さない」側）。 */
 
     /* ── 領収書の中身 ────────────────────────────────────────────
        ★明細も内訳も出さない★
@@ -817,23 +985,39 @@
     }
 
     if (isReceipt) {
-      var rcHtml = '<div class="sheet">' + headBlock(0) + grandBlock() + receiptBody() + '</div>';
+      var rcHtml = '<div class="sheet">' + freeSealHtml() + headBlock(0, '') + grandBlock() + receiptBody() + '</div>';
       return {
         html: '<!DOCTYPE html>\n<html lang="ja"><head><meta charset="UTF-8">'
           + '<meta name="viewport" content="width=device-width, initial-scale=1">'
           + '<title>' + esc(docTitle) + '</title>'
-          + '<style>' + css(TH) + '</style></head><body>' + rcHtml + '</body></html>',
+          + '<style>' + css(TH, !!sealFree(g)) + '</style></head><body>' + rcHtml + '</body></html>',
         title: docTitle, templateId: inv.template_id || TEMPLATE_ID,
         cols: spec, colWidths: colW, pages: 1, docKind: 'receipt',
       };
+    }
+
+    /** 紙に 直に貼る 印（自由な場所を決めた時だけ） */
+    function freeSealHtml() {
+      if (!g.sealDataUrl || !sealFree(g)) return '';
+      return '<img class="seal seal-free" style="' + sealStyle(g) + '" src="'
+        + esc(g.sealDataUrl) + '" alt="">';
     }
 
     /* ── 紙を組む ── */
     var sheets = pages.map(function (pageLines, idx) {
       var last = (idx === pages.length - 1);
       var offset = pages.slice(0, idx).reduce(function (a, x) { return a + x.length; }, 0);
+      /* ★◯月分・挨拶・ご請求金額・繰越★は 自社の塊と 同じ表の中に入れる（下をそろえる為） */
+      /* ★繰越は 表の中に 入れない★＝入れると 自社の塊が 繰越の下端まで 落ちる
+         （実測 2026-08-31：87.3〜106.7mm＝明細のすぐ上まで 下がった）。
+         ★そろえたいのは「ご請求金額」の下★なので、繰越は 表の外＝金額のすぐ下に 出す。 */
+      var showMoney = ((idx === 0 && !multi) || (last && multi));
+      var mid = ''
+        + (idx === 0 ? periodBlock() : '')
+        + (showMoney ? greetBlock() + grandBlock() : '');
       var body = ''
-        + headBlock(idx)
+        + headBlock(idx, mid)
+        + (showMoney ? carryBlock() : '')
         /* ★繰越は1ページ目の金額のすぐ下★（前回の残りを含む額なので、金額の根拠として先に見せる）
            ここに並べないと carryBlock() は作られるだけで紙に載らない
            （2026-08-11：関数はあるのに1度も呼ばれていなかった＝lib緑でも紙に出ない） */
@@ -851,9 +1035,6 @@
              ご請求金額（税込）             ← 1枚物は1枚目／複数ページは ★最後の紙★
              ◯ / ◯ ページ                  ← ★いつも明細のすぐ上★
              （明細） */
-        + (idx === 0 ? periodBlock() : '')
-        + ((((idx === 0 && !multi) || (last && multi)))
-          ? greetBlock() + grandBlock() + carryBlock() : '')
         + pagenoBlock(idx)
         /* ★2カラム★ 左＝①ご請求の内訳（明細）／右＝②差し引く＋③締め
              ★2段組みは表で作る★（flex だと文が1文字ずつ縦に割れる＝前科あり）。
@@ -934,7 +1115,7 @@
          中身が少なくても ★紙の大きさは A4 固定★。足元（自社情報）は下端から測った位置に置く。
          うちは 中身なりの高さだったので、2枚目が ★1枚目の途中から★ 始まって見えた。
          ＝★上の中身は上から積み・足元は紙の下端に貼る★（表の2行で作る＝flex は使わない）。 */
-      return '<div class="sheet"><table class="pg"><tbody>'
+      return '<div class="sheet">' + freeSealHtml() + '<table class="pg"><tbody>'
         + '<tr class="pg-b"><td>' + body + '</td></tr>'
         + '<tr class="pg-f"><td>' + foot + '</td></tr>'
         + '</tbody></table></div>';
@@ -944,7 +1125,7 @@
       + '<!DOCTYPE html>\n<html lang="ja"><head><meta charset="UTF-8">'
       + '<meta name="viewport" content="width=device-width, initial-scale=1">'
       + '<title>' + esc(docTitle) + '</title>'
-      + '<style>' + css(TH) + '</style></head><body>'
+      + '<style>' + css(TH, !!sealFree(g)) + '</style></head><body>'
       + sheets
       + '</body></html>';
 
@@ -957,7 +1138,11 @@
   /* ── 紙の見た目 ────────────────────────────────────────────
      ★文が入る所に flex/grid を使わない★（1文字ずつ縦に割れる事故を作らない）。
      ★枠で囲まない★（御請求金額・振込先・備考）＝うちの紙の作法。 */
-  function css(t) {
+  /* ★印を「紙のどこでも」置ける様にする為の 1点だけの違い★
+     ・既定 … 社名の行を 基準にする（.from-name が position:relative）
+     ・自由 … ★紙（.sheet）を 基準にする★＝社名の行を 基準にしない
+     ＝どちらか一方だけが 基準になる（2つ在ると 印が 思った所へ行かない）。 */
+  function css(t, free) {
     var TH = themeOf(t);
     var INK = TH.ink, SUB = TH.sub, LINE = TH.line, ACCENT = TH.accent;
     var rowsOnly = TH.rule !== 'all';
@@ -971,7 +1156,7 @@
       '-webkit-print-color-adjust:exact;print-color-adjust:exact;}',
       /* ★1ページ＝A4の紙そのもの★（中身が少なくても紙の大きさは変わらない）
          ＝2枚目が「1枚目の途中」から始まらない。見本＝代行請求 invoice-pdf.js（addPage([A4]）。 */
-      '.sheet{width:210mm;min-width:210mm;height:297mm;margin:0 auto;padding:10mm 10mm;',
+      '.sheet{position:relative;width:210mm;min-width:210mm;height:297mm;margin:0 auto;padding:10mm 10mm;',
       'position:relative;overflow:hidden;background:#FFFFFF;}',
       /* 上の中身は上から積み、足元は紙の下端に貼る（★表の2行で作る＝flex を使わない★） */
       '.pg{width:100%;height:100%;border-collapse:collapse;table-layout:fixed;}',
@@ -994,10 +1179,25 @@
 
       /* 宛名（左）／自社（右）。★表の2列＝幅が足りなくても文が縦に割れない★
          ★下線は引かない（うちの紙は引いていない）★ */
-      '.party{width:100%;border-collapse:collapse;margin:0 0 3mm;table-layout:fixed;}',
+      '.party{width:100%;border-collapse:collapse;margin:0 0 4mm;table-layout:fixed;}',
       '.party td{vertical-align:top;padding:0;}',
       '.party-to{width:56%;min-width:80mm;}',
+      /* ★自社の塊は 下寄せ★＝「ご請求金額」の下と そろう（司さん 2026-08-31）
+         ・2段ぶん（rowspan=2）の高さを持ち、その ★下端★に 中身を置く
+         ・繰越などで 金額の側が 伸びても ★下は いつも そろう★ */
       '.party-from{width:44%;min-width:60mm;text-align:right;}',
+      /* ★下寄せは「.party td」より 強く書く★
+         （.party td{vertical-align:top} の方が 強くて 効かなかった＝2026-08-31 実測） */
+      '.party td.party-from{vertical-align:bottom;}',
+      /* ★あて名の下〜「◯月分」の間の 余白は 元のまま★（司さん 2026-08-31
+         「赤丸合わせろってゆうただけで 赤線の所の余白詰めろなんかゆうたか？ いらんことすんなや」）
+         ＝表の中に入れた時に この15.3mmが 消えていた。★言われていない所は 変えない★。 */
+      /* ★.party td{padding:0} の方が 強い★ので td を付けて 書く（2026-08-31 実測で 効かなかった） */
+      '.party td.party-mid{vertical-align:top;padding-top:' + MID_PAD_MM + 'mm;}',
+      /* ★中の最後の物の 下の余白を 0にする★＝箱の下端＝字の下端になり、
+         右の自社と ★字どうしで そろう★（余白ぶんは 表の下の余白へ 移す） */
+      '.party-mid > *:last-child{margin-bottom:0;}',
+      '.to-subject{font-size:10.5pt;color:' + INK + ';display:block;line-height:1.5;margin-top:4px;}',
       '.to-name{font-size:14pt;font-weight:700;display:block;line-height:1.45;',
       'word-break:normal;overflow-wrap:break-word;}',
       '.to-sub{font-size:9.5pt;color:' + SUB + ';line-height:1.55;',
@@ -1008,7 +1208,17 @@
       'word-break:normal;overflow-wrap:break-word;}',
       /* ★角印は薄く重ねる（下の文字を隠し切らない）★
          大きさは会社が決める（10〜40mm・既定21mm）。文字の上に少しかかってよい。 */
-      '.seal{display:inline-block;object-fit:contain;margin-top:2mm;opacity:.95;}',
+      /* ★角印＝社名の右端に 重ねる★（ぶら下げない）。社名の行を 基準にする。 */
+      (free ? '.from-name{}' : '.from-name{position:relative;}'),
+      /* ★ほんの少し 透かす★（代行請求 invoice-pdf.js:775 と同じ opacity .95）
+         ＝重なった字が 完全には 消えない（判子は 上に押す物だが 下の字も 読めるのが 実物） */
+      /* ★場所（left/top/right）は 1つ1つの紙で 決める★＝ここには 書かない
+         （会社ごとに 変えられる物を CSSに焼き付けない）
+         ★既定★ … 社名の行の中で 右端に 重ねる（縦は 行の真ん中＝translateY で 半分 上げる）
+         ★自由★ … 紙（.sheet）の左上からの mm＝行の真ん中に 合わせない（ずらさない） */
+      '.seal{position:absolute;transform:translateY(-50%);opacity:.95;'
+        + 'object-fit:contain;pointer-events:none;}',
+      '.seal-free{transform:none;}',
       '.pageno{font-size:9.5pt;color:' + SUB + ';margin:0 0 2.4mm;}',
       '.lead-greet{margin:0 0 1.6mm;}',
 
@@ -1240,7 +1450,9 @@
   return {
     build: build, css: css, esc: esc, yen: yen, comma: comma,
     dateStr: dateStr, jpDate: jpDate, honorOf: honorOf, taxLabel: taxLabel,
-    paginate: paginate, sealMm: sealMm, TEMPLATE_ID: TEMPLATE_ID,
+    paginate: paginate, sealMm: sealMm, sealStyle: sealStyle, sealOverflowMm: sealOverflowMm,
+    TEMPLATE_ID: TEMPLATE_ID,
+    MID_PAD_MM: MID_PAD_MM,
     /* ★振込先の分け方は紙も Excel も同じ物を呼ぶ★ */
     bankLines: bankLines,
     ROWS_FIRST: ROWS_FIRST, ROWS_REST: ROWS_REST,

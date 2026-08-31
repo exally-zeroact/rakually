@@ -16,6 +16,9 @@
   var DOC = global.SeikyuDoc, TAX = global.SeikyuTax, PAPER = global.SeikyuPaper;
   var NAME = global.SeikyuName, AOA = global.SeikyuAoa, OUT = global.SeikyuOut;
   var COLS = global.SeikyuCols, TPL = global.SeikyuTemplates;
+  /* ★紙の作りを「誰が決めるか」は 1か所★（写し > その1通 > ★この相手★ > 会社 > 様式）
+     司さん 2026-08-29「取引先ごとに 請求書の様式を ちゃんと設定できてる前提やけど？」 */
+  var SCOPE = global.SeikyuScope;
   var GENSEN = global.SeikyuGensen, CARRY = global.SeikyuCarry;
   /* ★登録番号は当てない。打ち間違いだけ弾く（通信なし）★ 判定は lib/toroku-no.js が持ち主 */
   var TOROKU = global.TorokuNo;
@@ -96,6 +99,10 @@
       cols: (d.invoiceCols && Array.isArray(d.invoiceCols.items) && d.invoiceCols.items.length) ? d.invoiceCols : null,
       /* ★紙の枠の行数（空＝既定。既定の数は紙の側が持っている）★
          0以上の整数だけ受ける。読めない字が入っていたら「決めていない」と同じ扱い。 */
+      /* ★紙の書き方（会社が選べる・焼き付けない）★（指示役 2026-08-28「カスタム性」）
+         ★焼き付けてよいのは 法律だけ★＝ここは 全部 見た目と言い方の話。
+         空（未設定）なら ★様式の既定★ が効く（何も選ばなければ 今までどおり）。 */
+      paperStyle: (d.invoiceStyle && typeof d.invoiceStyle === 'object') ? d.invoiceStyle : {},
       paperRows: rowsSetting(d.invoicePaperRows),
       deductRows: rowsSetting(d.invoiceDeductRows),
     };
@@ -124,13 +131,33 @@
     }
     var own = v.data && v.data.cols;
     if (own && Array.isArray(own.items) && own.items.length) return COLS.normalizeSpec(own);
+    /* ★この相手だけの列★（会社の既定より 強い・無ければ 素通り＝今までどおり） */
+    var pc = SCOPE && SCOPE.partnerPaper(partnerById(v.partner_id)).cols;
+    if (pc && Array.isArray(pc.items) && pc.items.length) return COLS.normalizeSpec(pc);
     if (s.cols) return COLS.normalizeSpec(s.cols);
     return COLS.normalizeSpec(TPL.getOrDefault(v.template_id || s.template).cols);
   }
+  /** ★この相手の 紙の行数★（無ければ 会社の既定）。空欄と 0 は 別物 */
+  function rowsForPartner(pid, orgRows) {
+    var pr = SCOPE && SCOPE.partnerPaper(partnerById(pid)).paperRows;
+    return (pr === undefined || pr === null || pr === '') ? orgRows : pr;
+  }
+  /** ★この相手が 件名を紙に出すか★（相手の決めが 会社の既定より 強い） */
+  function subjectOnFor(pid) {
+    var ps = SCOPE && SCOPE.partnerPaper(partnerById(pid)).subjectOn;
+    if (ps === true || ps === false) return ps;
+    return !!((settings().paperStyle || {}).subjectOn);
+  }
+
   function themeOf(inv) {
     var v = inv || {};
-    var id = v.template_id || settings().template;
+    var id = v.template_id || templateForPartner(v.partner_id);
     return TPL.getOrDefault(id).theme;
+  }
+  /** ★この相手の様式★（無ければ 会社の既定）＝様式を決める所は ここ1つ */
+  function templateForPartner(pid) {
+    var pt = SCOPE && SCOPE.partnerPaper(partnerById(pid)).template;
+    return (pt && TPL.get(pt)) ? pt : settings().template;
   }
 
   var ROUND_LABEL = { floor: '切り捨て', ceil: '切り上げ', round: '四捨五入' };
@@ -198,12 +225,152 @@
     return lb;
   }
 
+  /* ═══ ★よく使う品目★ ═══
+     ・数え方は seikyu-items.learn が唯一の正（ここでは数えない）
+     ・★出す物が無い時は 候補の箱ごと 出さない★（空の候補は「壊れている」に見える） */
+  var itemsCache = null, itemsKey = '';
+  function itemList() {
+    var IT = global.SeikyuItems; if (!IT) return [];
+    var list = S.invoices || [];
+    var key = list.length + ':' + (S.kind || 'invoice');
+    if (itemsCache && itemsKey === key) return itemsCache;
+    itemsKey = key;
+    itemsCache = IT.learn(list, { kind: S.kind || 'invoice' });
+    return itemsCache;
+  }
+  function drawItemList() {
+    var host = $('items-dl'); if (!host) return;
+    host.innerHTML = itemList().map(function (it) {
+      return '<option value="' + esc(it.name) + '"></option>';
+    }).join('');
+  }
+
+  /* ═══ ★集計★（司さん 2026-08-30「競合が当たり前にしてる事は こちらも当たり前に」）═══
+     ・数え方は seikyu-report.js（その中も seikyu-doc.paymentStateOf を呼ぶ）＝★ここでは1つも数え直さない★
+     ・★入金が読めていない時は「未確認」と書く★（0円と書かない）
+     ・★見積の時は 集計を出さない★（見積は 請求ではない） */
+  var repMonth = null;                       // null＝まだ人が選んでいない（＝いちばん新しい月）
+
+  function reportOf(month) {
+    var REP = global.SeikyuReport;
+    if (!REP) return null;
+    return REP.summarize({ invoices: S.invoices || [], receipts: S.receipts,
+      partners: S.partners || [], month: month, kind: S.kind || 'invoice', doc: DOC });
+  }
+  function renderReport() {
+    var REP = global.SeikyuReport, sumEl = $('rep-sum'), box = $('rep-box');
+    if (!sumEl || !box || !REP) return;
+    var isInv = (S.kind || 'invoice') === 'invoice';
+    show(sumEl, isInv); show(box, isInv);
+    if (!isInv) return;
+
+    var months = REP.monthsOf((S.invoices || []).filter(function (v) {
+      return (v.doc_type || 'invoice') === 'invoice' && v.status === 'issued';
+    }));
+    var sel = $('rep-month');
+    if (repMonth === null || (repMonth && months.indexOf(repMonth) < 0)) repMonth = months[0] || '';
+    sel.innerHTML = '<option value="">ぜんぶ</option>'
+      + months.map(function (m) {
+        return '<option value="' + esc(m) + '"' + (m === repMonth ? ' selected' : '') + '>'
+          + esc(m.slice(0, 4) + '年' + String(Number(m.slice(5, 7))) + '月') + '</option>';
+      }).join('');
+    sel.value = repMonth;
+
+    var s2 = reportOf(repMonth);
+    var lb = repMonth ? (repMonth.slice(0, 4) + '年' + Number(repMonth.slice(5, 7)) + '月') : 'ぜんぶ';
+    var unk = (s2.totals.paid === null);
+    if (!s2.seen) {
+      sumEl.innerHTML = '<span class="rep-c">' + esc(lb) + ' … 出した請求書は まだありません</span>';
+      $('rep-body').innerHTML = '<p class="hint">この月に 発行した請求書がありません。'
+        + '（下書きと 取り消した紙は 数えません）</p>';
+      return;
+    }
+    var cell = function (t, v) { return '<span class="rep-c"><span class="rep-l">' + t
+      + '</span><span class="rep-v">' + v + '</span></span>'; };
+    sumEl.innerHTML = '<span class="rep-c"><span class="rep-l">' + esc(lb) + '</span>'
+      + '<span class="rep-v">' + s2.totals.count + '通</span></span>'
+      + cell('請求', yen(s2.totals.total) + ' 円')
+      + cell('入金', unk ? '（未確認）' : yen(s2.totals.paid) + ' 円')
+      + cell('残り', unk ? '（未確認）' : yen(s2.totals.remain) + ' 円');
+
+    $('rep-body').innerHTML = s2.rows.map(function (r) {
+      var tag = unk ? '' : '<span class="tag ' + (r.state === 'paid' ? 'tag-on'
+        : r.state === 'unpaid' ? 'tag-off' : 'tag-mute') + '">'
+        + (DOC.PAY_STATE_LABEL[r.state] || '') + '</span>';
+      return '<div class="rep-row"><span class="rep-n">' + tag + esc(r.name)
+        + '<span class="rep-k">' + r.count + '通</span></span>'
+        + '<span class="rep-a">' + yen(r.total) + ' 円'
+        + (unk ? '' : '<span class="rep-k">入金 ' + yen(r.paid) + ' ／ 残り ' + yen(r.remain) + '</span>')
+        + '</span></div>';
+    }).join('')
+      + (unk ? '<p class="hint">入金が読めていないので、入金と残りは出していません（0円ではありません）。</p>' : '');
+  }
+
+  /* ═══ ★毎月の請求（今月まだの相手）★ ═══
+     ・見つけ方は seikyu-recurring.js が唯一の正（ここでは数えない）
+     ・★勝手に作らない★＝出すのは「まだですよ」の1行と 押す物だけ
+     ・押したら ★前回の紙を 複製する★（複製の決まりは seikyu-doc.duplicateDoc） */
+  function renderRecurring() {
+    var host = $('rec-box'); if (!host) return;
+    var RC = global.SeikyuRecurring;
+    var isInv = (S.kind || 'invoice') === 'invoice';
+    if (!RC || !isInv) { host.innerHTML = ''; return; }
+    var due = RC.dueList({ invoices: S.invoices || [], partners: S.partners || [],
+      ym: RC.ymOf(todayYmd()) });
+    if (!due.length) { host.innerHTML = ''; return; }
+    var ym = RC.ymOf(todayYmd());
+    var lb = ym.slice(0, 4) + '年' + Number(ym.slice(5, 7)) + '月';
+    host.innerHTML = '<div class="card rec-card">'
+      + '<p class="rec-h">毎月 出している相手で、' + esc(lb) + 'ぶんが まだの人がいます。</p>'
+      + due.map(function (d) {
+        return '<div class="rec-row"><span class="rec-n">' + esc(d.name)
+          + '<span class="rec-k">' + esc(d.lastYm.slice(0, 4)) + '年'
+          + Number(d.lastYm.slice(5, 7)) + '月まで ' + d.run + 'か月つづけて 出しています'
+          + (d.lastTotal ? '（前回 ' + yen(d.lastTotal) + ' 円）' : '') + '</span></span>'
+          + '<button class="mini" type="button" data-rec="' + esc(d.lastId) + '">前回と同じ内容で作る</button>'
+          + '</div>';
+      }).join('')
+      + '<p class="hint">押すと 前回の中身を 写した下書きが 出来ます（番号と請求日は 取り直します）。'
+      + 'この画面が 勝手に 請求書を 作る事は ありません。</p>'
+      + '</div>';
+    Array.prototype.forEach.call(host.querySelectorAll('[data-rec]'), function (b) {
+      b.onclick = function () { return recurFrom(b.getAttribute('data-rec')); };
+    });
+  }
+  /** 前回の紙から 今月ぶんを 作る（＝複製と 同じ道を通る） */
+  function recurFrom(id) {
+    var src = null, list = S.invoices || [];
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) src = list[i];
+    if (!src) { box('list-err', 'もとの請求書が 見つかりません。「読み直す」を押してください。'); return Promise.resolve(); }
+    S.cur = src;
+    return duplicateCur();
+  }
+
+  /* ★探す条件★（画面から読むだけ。数え方は 何も触らない） */
+  function findQuery() {
+    return { text: ($('q-text') || {}).value, from: ($('q-from') || {}).value,
+      to: ($('q-to') || {}).value, min: ($('q-min') || {}).value, max: ($('q-max') || {}).value };
+  }
+
   function renderList() {
+    renderRecurring();
+    renderReport();
     var host = $('list-body'); if (!host) return;
     var rows = S.invoices.filter(function (v) {
       if (S.fil === 'live') return v.status !== 'void';   // ★既定は取り消し以外（出した紙が上に来る）
       return S.fil === 'all' || v.status === S.fil;
     });
+    /* ★探す★（相手・番号・件名／請求日の範囲／金額の範囲。決まりは seikyu-find が唯一の正）
+       ★何件から 何件に 絞ったかを 必ず出す★＝「消えた」と 思わせない。 */
+    var FIND = global.SeikyuFind, before = rows.length, q = findQuery();
+    if (FIND && !FIND.isEmpty(q)) {
+      rows = FIND.filter(rows, q, { partnerName: partnerName });
+      setText('q-hint', before + '通のうち ' + rows.length + '通が 当てはまりました。'
+        + (rows.length ? '' : '（言葉を減らすか、範囲を広げてみてください）'));
+      var fb = $('find-box'); if (fb) fb.open = true;
+    } else {
+      setText('q-hint', '');
+    }
     if (!rows.length) {
       host.innerHTML = '<div class="card"><div class="empty">'
         + (S.invoices.length ? 'この絞り込みに当てはまる請求書はありません。' : 'まだ請求書がありません。「＋ 新しい請求書」から出せます。')
@@ -215,6 +382,15 @@
         : v.status === 'void' ? '<span class="tag tag-mute">取り消し</span>'
           : '<span class="tag tag-off">下書き</span>';
       var g = (v.totals && v.totals.grandTotal);
+      /* ★「まだ金額を入れていない下書き」を 0円と 見せない★（司さん 2026-08-30
+         「項目だけ入れて金額入れずに保存もしとける？」＝★出来る★。だが 一覧では
+          ★0円★と出ていて ★入れ忘れと 本当の0円が 見分けられなかった★）。
+         ★数え方は DOC.rowIssuesOf 1本★＝発行の時に止める判定と 同じ物を使う
+         （2か所で 別々に数えると 片方だけ直った時に 食い違う）。 */
+      var waiting = 0;
+      if (v.status === 'draft') {
+        try { waiting = DOC.rowIssuesOf(v.lines || []).noAmount.length; } catch (e) { waiting = 0; }
+      }
       return '<button class="row" type="button" data-open="' + esc(v.id) + '">'
         + '<span class="iv-top">' + tag
         + '<span class="iv-no">' + (esc(v.no) || '（未採番）') + '</span>'
@@ -222,7 +398,11 @@
         + '<span class="iv-sub">' + esc(v.issue_ymd || '請求日なし')
         + (v.due_ymd ? '　期限 ' + esc(v.due_ymd) : '')
         + '　' + esc(payLabel(v)) + '</span>'
-        + '<span class="iv-sub"><span class="iv-amt">' + (g === undefined || g === null ? '—' : yen(g) + ' 円') + '</span></span>'
+        + '<span class="iv-sub"><span class="iv-amt">'
+        + (waiting
+          ? '金額まだ ' + waiting + '行'
+          : (g === undefined || g === null ? '—' : yen(g) + ' 円'))
+        + '</span></span>'
         + '</button>';
     }).join('');
     Array.prototype.forEach.call(host.querySelectorAll('[data-open]'), function (b) {
@@ -362,6 +542,7 @@
     renderTplAsk();
     renderGuess();
     renderPtAsk();
+    renderInvAsk();      /* ★この1通のこと（件名・支払期限）も 1問ずつ聞く★ */
     renderLines();
     renderDeductions();
     recalc();
@@ -641,9 +822,17 @@
     var host = $('danger-row');
     if (host) {
       var html = '';
+      /* ★複製★（司さん 2026-08-30「競合が当たり前にしてる事は こちらも当たり前に」）
+         ＝毎月 同じ相手に 似た内容を出すのが 商売の普通の形。どの1通からでも 写せる。
+         ★中身が空の紙からは 写さない★（写す物が無い＝押せる意味が無い） */
+      if (v.id && (v.lines || []).length) {
+        html += '<button class="btn-ghost" type="button" id="b-copy">この'
+          + esc(DOC.docLabel(v.doc_type || 'invoice')) + 'を複製</button>';
+      }
       if (DOC.canVoid(v)) html += '<button class="btn-ghost" type="button" id="b-void">この請求書を取り消す</button>';
       if (DOC.canDelete(v) && v.id) html += '<button class="bdel" type="button" id="b-delete">下書きを削除</button>';
       host.innerHTML = html;
+      var bc = $('b-copy'); if (bc) bc.onclick = function () { return duplicateCur(); };
       var bv = $('b-void'); if (bv) bv.onclick = function () { return voidIt(); };
       var bd = $('b-delete'); if (bd) bd.onclick = function () { return removeDraft(); };
       show($('out-box'), ro ? !!html : true);
@@ -654,7 +843,11 @@
          発行済み・取り消し済みは、ここが唯一の出来る事なので ★開いた状態で出す★。 */
       var can = [];
       if (!ro) can.push('下書き');
-      can.push('下見', '印刷', 'Excel');
+      /* ★PDFを 見出しに書く★（司さん 2026-08-30「知り合いに使ってもらう」）
+         中に「PDFで保存」が在るのに 見出しに無いと、★開くまで PDFが出せると分からない★。
+         ここは この畳みの決まり（中に在る物だけを 見出しに書く）を そのまま守る。 */
+      can.push('下見', 'PDF', '送る', '印刷', '納品書', 'Excel');
+      if (v.id && (v.lines || []).length) can.push('複製');
       if (DOC.canVoid(v)) can.push('取り消し');
       if (DOC.canDelete(v) && v.id) can.push('削除');
       setText('out-sum', (ro ? 'この請求書に出来る事' : 'ほかの出し方') + '（' + can.join('・') + '）');
@@ -827,6 +1020,34 @@
     });
   }
 
+  /** ★この紙と同じ物を もう1通★（写す物・写さない物の決まりは seikyu-doc.duplicateDoc が唯一の正）
+   *  ★入金は 付いてこない★（元の紙の物＝付けたら 二重に数える）。 */
+  function duplicateCur() {
+    var src = S.cur;
+    if (!src || !src.id || !(src.lines || []).length) {
+      box('edit-err', 'この紙には 写す中身がありません。'); return Promise.resolve();
+    }
+    var from = src.no || '';
+    var draft = DOC.duplicateDoc(src);
+    draft.issue_ymd = todayYmd();
+    S.docType = draft.doc_type;
+    drawKind();
+    S.cur = Object.assign(blankInvoice({ docType: draft.doc_type }), draft);
+    S.cur.data = Object.assign({}, draft.data || {});
+    S.guessDone = true;               // 中身は もう写してある＝「前回と同じで作りますか」は出さない
+    S.dirty = true;
+    return loadList().then(function () {
+      fillEdit();
+      return autoNumber();
+    }).then(function () {
+      goScreen('scr-edit');
+      box('edit-ok', (from ? from + ' ' : '') + 'の中身を そのまま写しました。'
+        + '番号と請求日は 新しく取り直しています。'
+        + '入金は 写していません（元の紙のままです）。'
+        + '中身を直してから「発行する」を押してください。');
+    });
+  }
+
   /* ═══ ★請求 → 領収（入金1行から出す紙）★ ═══
      ★棚を増やさない★＝①で作った pay_receipts の1行が、そのまま1枚の領収書になる。
      ★番号は請求番号＋枝番。消した入金も席を占める★（同じ番号の紙を2枚 外に出さない）。 */
@@ -865,6 +1086,34 @@
       },
     });
   }
+  /** ★領収書を 自作PDFで★（紙は 今の紙のまま／落とし口は 1本／出せない時は 黙らない） */
+  function doReceiptPdf(rcId, name, how) {
+    /* ★止めた理由は receiptPaperInput が もう出している★＝ここで上書きしない
+       （2か所で言うと 後の方の 当たりさわりのない字が 本当の理由を 消す） */
+    var pi = receiptPaperInput(rcId);
+    if (!pi) return;
+    var PDF = global.SeikyuPdf;
+    if (!PDF) { box('pay-err', 'PDFを作る部品が読めていません。画面を開き直してください。'); return; }
+    var built = PAPER.build(Object.assign({}, pi, { title: name }));
+    var open = (how === 'open');
+    box('pay-ok', '領収書のPDFを作っています…（字を紙に埋め込むので 少し待ちます）');
+    PDF.build(built.html, { base: '../' }).then(function (bytes) {
+      var miss = PDF.lastMissing ? PDF.lastMissing() : [];
+      return (open ? OUT.pdfOpen(bytes, name) : OUT.pdf(bytes, name)).then(function (r) {
+        box('pay-ok', (open
+          ? ((r && r.fellBack)
+            ? '新しい窓が開けなかったので、領収書 ' + pi.receipt.no + ' のPDFを 落としました。'
+            : '領収書 ' + pi.receipt.no + ' のPDFを 別の窓で 開きました。'
+              + 'その画面の 共有ボタンから メールなどで 送れます。')
+          : '領収書 ' + pi.receipt.no + ' のPDFを作りました。')
+          + (miss.length ? 'この字は 字体に無いので 〓 で出しました：' + miss.join('') : ''));
+      });
+    }).catch(function (e) {
+      box('pay-err', '領収書のPDFが作れませんでした（' + (e && e.message) + '）。'
+        + '「領収書」なら 印刷から 出せます。');
+    });
+  }
+
   function receiptFileName(rcId) {
     var v = S.cur, rc = receiptById(rcId);
     if (!rc) return null;
@@ -985,11 +1234,38 @@
           /* ★この1回ぶんの領収書★（棚は増やさない＝この行がそのまま1枚になる）
              返金の行には出さない（受け取っていない物の領収書を作らせない）。 */
           + (neg ? '' : '<button class="mini" type="button" data-rcp="' + esc(r.id) + '">領収書</button>')
+          /* ★領収書も 自作PDFで 出せる★（司さん 2026-08-30）
+             ＝印刷だけだと ★iPhoneで 紙の下に URLと日付が 付く★ */
+          + (neg ? '' : '<button class="mini" type="button" data-rcpdf="' + esc(r.id) + '">領収書PDF</button>')
+          /* ★送る★＝PDFを その場で開く → iPhoneの共有ボタンから メールに乗る（代行と同じ道） */
+          + (neg ? '' : '<button class="mini" type="button" data-rcsend="' + esc(r.id) + '">送る</button>')
           + '<button class="l-del" type="button" data-rc="' + esc(r.id) + '" aria-label="この入金の記録を消す">×</button>'
           + '</div>';
       }).join('');
       Array.prototype.forEach.call(host.querySelectorAll('[data-rc]'), function (b) {
         b.onclick = function () { return removeReceipt(b.getAttribute('data-rc')); };
+      });
+      /* ★領収書を 自作PDFで★（落とす＝data-rcpdf ／ 開いて送る＝data-rcsend）
+         名前を先に決めさせるのは 下と同じ。中身は 同じ1本（doReceiptPdf）。 */
+      Array.prototype.forEach.call(host.querySelectorAll('[data-rcsend]'), function (b) {
+        b.onclick = function () {
+          var id = b.getAttribute('data-rcsend');
+          var chk = DOC.canReceipt(receiptById(id), S.cur);
+          if (!chk.ok) { box('pay-err', chk.reason); return; }
+          var n = receiptFileName(id);
+          if (!n) { box('pay-err', '中身がまだ整っていないので、領収書が出せません。'); return; }
+          askNameWith(n, 'pdf', function (name) { doReceiptPdf(id, name, 'open'); });
+        };
+      });
+      Array.prototype.forEach.call(host.querySelectorAll('[data-rcpdf]'), function (b) {
+        b.onclick = function () {
+          var id = b.getAttribute('data-rcpdf');
+          var chk = DOC.canReceipt(receiptById(id), S.cur);
+          if (!chk.ok) { box('pay-err', chk.reason); return; }
+          var n = receiptFileName(id);
+          if (!n) { box('pay-err', '中身がまだ整っていないので、領収書が出せません。'); return; }
+          askNameWith(n, 'pdf', function (name) { doReceiptPdf(id, name); });
+        };
       });
       /* ★落とす前に「中身から作った名前」を出して直させる★（うちの決まり・全アプリ共通） */
       Array.prototype.forEach.call(host.querySelectorAll('[data-rcp]'), function (b) {
@@ -1113,7 +1389,10 @@
             + (tx === null ? '—' : yen(tx)) + '</td>';
         }
         var val, mode = '', extra = '';
-        if (r === 'name') { val = ln.name; extra = ' placeholder="品名"'; }
+        /* ★よく使う品目★（司さん 2026-08-30「競合が当たり前にしてる事は…」）
+           ＝過去の紙から覚えた品名を 候補に出す。選ぶと 単位・単価・税率が 入る。
+           ★登録させない★＝もう出した紙に 答えが書いてある（うちの「聞いてあげる」の形）。 */
+        if (r === 'name') { val = ln.name; extra = ' placeholder="品名" list="items-dl"'; }
         else if (r === 'unit') { val = ln.unit; extra = ' placeholder="式"'; }
         else if (r === 'qty') { val = ln.qty; mode = ' inputmode="decimal"'; }
         else if (r === 'price') { val = ln.price; mode = ' inputmode="decimal"'; }
@@ -1138,6 +1417,8 @@
         + '<td class="l-x"><button class="l-del" type="button" data-del="' + i + '" aria-label="この行を消す">×</button></td></tr>';
     }).join('');
 
+    drawItemList();
+
     Array.prototype.forEach.call(host.querySelectorAll('input,select'), function (el) {
       el.oninput = el.onchange = function () {
         var tr = el.closest('tr'), i = +tr.getAttribute('data-i');
@@ -1155,6 +1436,23 @@
         S.dirty = true;
         recalc();
       };
+    });
+    /* ★品名が決まった時だけ★ 埋める（1文字打つたびに 動かさない＝打っている最中に 邪魔しない）。
+       ★人が打った物は 1文字も 上書きしない★（決まりは seikyu-items.fill が唯一の正）。 */
+    Array.prototype.forEach.call(host.querySelectorAll('[data-f="name"]'), function (el) {
+      el.addEventListener('change', function () {
+        var IT = global.SeikyuItems; if (!IT) return;
+        var tr = el.closest('tr'), i = +tr.getAttribute('data-i');
+        var item = IT.find(itemList(), el.value);
+        if (!item) return;
+        var r = IT.fill(S.cur.lines[i], item);
+        if (!r.filled.length) return;
+        S.cur.lines[i] = r.line;
+        S.dirty = true;
+        renderLines(); recalc(); lockInputs();
+        box('edit-ok', '前に出した「' + item.name + '」から ' + r.filled.join('・')
+          + ' を入れました（違うときは そのまま直せます）。');
+      });
     });
     Array.prototype.forEach.call(host.querySelectorAll('[data-del]'), function (b) {
       b.onclick = function () {
@@ -1366,9 +1664,13 @@
     if (!v.issue_ymd) return { ok: false, why: '請求日を入れると 紙が出せます。' };
     return { ok: true };
   }
+  /* ★紙から作る物は ぜんぶ ここに書く★（1つでも 書き忘れると
+     ★出せない中身なのに 押せる★＝押した後で 赤い字を出す形に 戻ってしまう）。
+     ★b-pdf（自作PDF）は 2026-08-30 に足した時 ここに書き忘れていた★ */
+  var PAPER_BTNS = ['b-preview', 'b-print', 'b-pdf', 'b-pdfopen', 'b-delivery', 'b-xlsx'];
   function applyPaperGate() {
     var g = paperGate();
-    ['b-preview', 'b-print', 'b-xlsx'].forEach(function (id) {
+    PAPER_BTNS.forEach(function (id) {
       var b = $(id); if (b) b.disabled = !g.ok;
     });
     var p = $('paper-gate');
@@ -1448,7 +1750,15 @@
           + esc(x[0]) + '</span><span class="tot-v">' + esc(x[1]) + '</span></div>';
       }).join('');
       /* ★1円の端数を最後の行に寄せた時は 黙らない★
-         （税率ごとに1回だけ端数処理する＝国税庁 Q&A 問57。行ごとに丸めて足す道は作らない） */
+         （税率ごとに1回だけ端数処理する＝国税庁 Q&A 問57。行ごとに丸めて足す道は作らない）
+
+         ★これは 画面にだけ出す。紙には出さない★（決めた事・2026-08-28 指示役へ回答）
+           理由① 適格請求書の記載事項（国税庁 No.6625 の6つ）に ★行ごとの税額は 入っていない★。
+                 紙に要るのは「★税率ごとに区分した消費税額等★」だけ。
+           理由② 寄せた話は ★作る人が確かめる為の物★で、★受け取る人には要らない★。
+                 紙に出すと「1円を どこかへ寄せた」と読めて 逆に不安にさせる。
+           理由③ 紙は ★1枚に収める★のが決まり（行が増えると 明細が押し出される）。
+         ★出さないと決めた★＝出したくなった日は ここを読んでから決める。 */
       if (t.spread && t.spread.length) {
         html += '<div class="hint">' + t.spread.map(function (x) {
           return esc(x.pct) + '% の消費税の端数 ' + yen(x.residual) + ' 円を、'
@@ -1489,7 +1799,8 @@
     var pi = { deduct: currentDeduct(), deductLines: DOC.deductionsOf(v), rateRows: PAPER.rateRowsOf(t) };
     var st = settings();
     var own = (v.data && v.data.paperRows);
-    var rows = (own === undefined || own === null || own === '') ? st.paperRows : own;
+    var rows = (own === undefined || own === null || own === '')
+      ? rowsForPartner(v.partner_id, st.paperRows) : own;
     if (rows !== null && rows !== undefined && rows !== '') pi.paperRows = rows;
     var n = (t.lines || []).length;
     /* ★枚数は紙の lib が決めた物をそのまま使う★（画面で ceil し直さない）
@@ -1611,12 +1922,15 @@
        ★発行済みは写しの数★（あとで行数を変えても、出した紙は同じ顔のまま）。 */
     var st = settings();
     var own = (v.data && v.data.paperRows), ownD = (v.data && v.data.deductRows);
-    var rows = (own === undefined || own === null || own === '') ? st.paperRows : own;
+    var rows = (own === undefined || own === null || own === '')
+      ? rowsForPartner(v.partner_id, st.paperRows) : own;
     var dRows = (ownD === undefined || ownD === null || ownD === '') ? st.deductRows : ownD;
     return {
       inv: inv, tax: t, partner: partner, org: org, cols: colsOf(v), theme: themeOf(v),
       gensen: currentGensen(), carry: currentCarry(),
       deduct: ded, deductLines: dedLines,
+      /* ★件名を紙に出すか★も この相手の決めが 強い（会社の既定は そのまま残る） */
+      style: Object.assign({}, st.paperStyle, { subjectOn: subjectOnFor(v.partner_id) }),
       paperRows: (rows === null ? undefined : rows),
       deductRows: (dRows === null ? undefined : dRows),
     };
@@ -1684,6 +1998,42 @@
     var r = OUT.print(built.html, name);
     if (!r.ok) box('edit-err', r.reason);
     else box('edit-ok', '紙だけの新しい窓を開きました。PDFにする時は、送信先を「PDFに保存」にしてください。');
+  }
+
+  /* ★自作PDF★（司さん 2026-08-30「自作PDFのやり方しか指示してないわ」）
+     ・紙の形は ★今の紙のまま★（同じ PAPER.build を通す）
+     ・落とすのは ★渡し口1本（FileOut.deliver）★＝ここで 自前に 落とさない
+     ・★出せない時は 黙らない★（なぜ出せないかを 1行 出す） */
+  /** ★PDFを 落とす／開く★（作り方は 1つ。最後の1歩だけ 違う）
+   *  how = 'save'（落とす）／'open'（iPhoneのビューアで開く→共有からメール） */
+  function doPdf(name, how, docKind) {
+    var pi = paperInput();
+    if (!pi) { box('edit-err', '中身がまだ整っていないので、PDFが作れません。上の赤い印を直してください。'); return; }
+    var PDF = global.SeikyuPdf;
+    if (!PDF) { box('edit-err', 'PDFを作る部品が読めていません。画面を開き直してください。'); return; }
+    /* ★納品書は 同じ1通を 別の顔で出すだけ★（棚は増やさない） */
+    var built = PAPER.build(Object.assign({}, pi, { title: name },
+      docKind ? { docKind: docKind } : {}));
+    var open = (how === 'open');
+    var kindName = docKind === 'delivery' ? '納品書' : 'PDF';
+    box('edit-ok', kindName + 'を作っています…（字を紙に埋め込むので 少し待ちます）');
+    PDF.build(built.html, { base: '../' }).then(function (bytes) {
+      var bad = PDF.lastBadImages ? PDF.lastBadImages() : [];
+      var miss = PDF.lastMissing ? PDF.lastMissing() : [];
+      return (open ? OUT.pdfOpen(bytes, name) : OUT.pdf(bytes, name)).then(function (r) {
+        box('edit-ok', (open
+          ? ((r && r.fellBack)
+            ? 'この端末では 新しい窓が開けなかったので、' + kindName + 'を 落としました。'
+              + '（ブラウザの ポップアップの設定を 見てください）'
+            : kindName + 'を 別の窓で 開きました。その画面の 共有ボタンから メールなどで 送れます。')
+          : kindName + 'を作りました。')
+          + (miss.length ? 'この字は 字体に無いので 〓 で出しました：' + miss.join('') : '')
+          + (bad.length ? '出せなかった絵が ' + bad.length + '件 あります' : ''));
+      });
+    }).catch(function (e) {
+      box('edit-err', 'PDFが作れませんでした（' + (e && e.message) + '）。'
+        + '「印刷 / PDF保存」なら 今すぐ出せます。');
+    });
   }
 
   function doExcel(name) {
@@ -1859,6 +2209,14 @@
 
   /* ═══ 列の編集（★どんな項目にも対応する所★） ═══ */
   function editCols() {
+    /* ★この相手だけの列★を 作ってあれば、取引先の画面では そちらを直す
+       （★2か所に 同じ列を持たない★＝直した先が どこか 画面に書いてある） */
+    var pid = $('s-partner') && $('s-partner').value;
+    var pOwn = pid ? SCOPE.partnerPaper(partnerById(pid)) : {};
+    if (pOwn.cols && pOwn.cols.items && pOwn.cols.items.length
+      && $('scr-set') && $('scr-set').classList.contains('active')) {
+      return pOwn.cols;
+    }
     // 編集できるのは下書きだけ。発行済みは写しの並びを見せるだけ。
     var v = S.cur;
     if (v && !locked()) {
@@ -1977,6 +2335,10 @@
      ★決まりは seikyu-doc.js（使える種類・上限・大きさ）★。ここは画面の配線だけ。
      ★画像は data URL で持つ＝Blob を作らない（落とす口は js/file-out.js の1本だけ）★ */
   var sealPending = null;   // 選んだばかりでまだ保存していない画像
+  /* ★入れた判子の形から 当てた大きさ★（司さん 2026-08-30
+     「個人の苗字の判子の大きさと 角印の判子の大きさも 自動で選別してるか？」）
+     ＝★当てて見せるだけ★。人が その場で 直せる（うちの決まり「聞いてあげる。埋めさせない」）。 */
+  var sealGuess = null;
 
   function fillSeal() {
     var d = S.org || {};
@@ -1984,11 +2346,153 @@
     var pv = $('seal-pv');
     if (url) { pv.src = url; show(pv, true); show($('seal-none'), false); }
     else { pv.removeAttribute('src'); show(pv, false); show($('seal-none'), true); }
-    $('seal-mm').value = DOC.sealSizeMm(d.sealSizeMm);
-    setText('seal-why', '大きさは ' + DOC.SEAL_MIN_MM + '〜' + DOC.SEAL_MAX_MM + 'mm の間だけ（既定 '
+    /* ★当てた大きさが在る時は それを出す★（保存前の下見の間だけ） */
+    $('seal-mm').value = DOC.sealSizeMm(sealGuess ? sealGuess.mm : d.sealSizeMm);
+    /* ★印の場所★（司さん 2026-08-31「場所は自由に変えれんのか？」）
+       ＝紙の左上からの mm。★空＝いつもの場所（社名に重ねる）＝これが 既定★。
+       ★倉庫に 決めた場所が 在れば それを 画面へ戻す★
+         （2026-08-31 実測で 抜けていた＝一度 決めた場所が 開き直すと 消え、
+           そのまま保存すると ★決めた場所が 黙って 消えた★） */
+    if (!sealTouched) {
+      sealXY = {
+        x: DOC.sealXY(d.sealX, d.sealSizeMm, 'x'),
+        y: DOC.sealXY(d.sealY, d.sealSizeMm, 'y'),
+      };
+    }
+    if ($('seal-x')) $('seal-x').value = (sealXY.x === null ? '' : sealXY.x);
+    if ($('seal-y')) $('seal-y').value = (sealXY.y === null ? '' : sealXY.y);
+    drawSealStage();
+    setText('seal-why', (sealGuess ? sealGuess.why + '（違う時は 上の数を 直してください）' : '')
+      + '大きさは ' + DOC.SEAL_MIN_MM + '〜' + DOC.SEAL_MAX_MM + 'mm の間だけ（既定 '
       + DOC.SEAL_DEFAULT_MM + 'mm）。画像は ' + Math.round(DOC.SEAL_MAX_BYTES / 1024) + 'KB まで。'
       + '発行した時の印は写しに残るので、あとで印を替えても出した紙は変わりません。');
     $('b-seal-clear').disabled = !(d.sealDataUrl || sealPending);
+  }
+
+  /* ═══ ★印の場所を 紙の上で 決める★ ═══
+     （司さん 2026-08-31「そこも違うかないか？ 場所は自由に変えれんのか？」）
+     ★決まった置き方を 選ばせるのを やめた★＝本物の紙の絵の上で ★つまんで動かす★。
+     ・場所は 紙の左上からの mm（seikyu-doc.sealXY が 唯一の正＝紙から出ない所に 収める）
+     ・空（未設定）＝いつもの場所（社名に重ねる）＝黙って 見た目を 変えない
+     ・★紙の絵は 本物★（PAPER.build で作った紙を そのまま縮める。作り物の絵を置かない） */
+  var sealXY = { x: null, y: null };
+  /* ★人が 触ったか★＝触った後は 倉庫の値で 上書きしない（打ちかけを 消さない） */
+  var sealTouched = false;
+
+  function sealXYRead() {
+    var d = S.org || {};
+    var mm = DOC.sealSizeMm($('seal-mm') ? $('seal-mm').value : d.sealSizeMm);
+    return {
+      x: DOC.sealXY($('seal-x') ? $('seal-x').value : d.sealX, mm, 'x'),
+      y: DOC.sealXY($('seal-y') ? $('seal-y').value : d.sealY, mm, 'y'),
+    };
+  }
+  /** 紙の絵を 描き直す（印は 絵の上に 別に置く＝つまめる様に） */
+  function drawSealStage() {
+    var stage = $('seal-stage'), fr = $('seal-paper'), img = $('seal-drag');
+    if (!stage || !fr || !img) return;
+    var d = S.org || {};
+    var url = sealPending || d.sealDataUrl || '';
+    show(stage, !!url);
+    if ($('b-seal-home')) show($('b-seal-home'), !!url);
+    if (!url) { setText('seal-pos-why', ''); return; }
+    var mm = DOC.sealSizeMm($('seal-mm') ? $('seal-mm').value : d.sealSizeMm);
+    var free = (sealXY.x !== null && sealXY.y !== null);
+    /* ★紙は 印なしで描く★＝つまむ印は 絵の上に 置く（二重に出さない）。
+       ★未設定の時だけ 紙に 印を入れる★＝いつもの場所が そのまま 見える。 */
+    var org = Object.assign({}, d, { bank: settings().bank },
+      sealPending ? { sealDataUrl: sealPending } : {},
+      free ? { sealDataUrl: '' } : {});
+    var html = sealPaperHtml(org);
+    if (fr.getAttribute('data-h') !== String(html.length)) {
+      fr.setAttribute('data-h', String(html.length));
+      fr.srcdoc = html;
+    }
+    show(img, free);
+    if (!free) {
+      setText('seal-pos-why', 'いつもの場所（社名に重ねる）です。紙の絵を 押すか、'
+        + '下の欄に mm を入れると、そこへ動かせます。');
+      img.removeAttribute('src');
+      return;
+    }
+    img.src = url;
+    var w = stage.clientWidth || 300, h = stage.clientHeight || Math.round(w * 297 / 210);
+    var px = w / DOC.PAPER_W_MM, py = h / DOC.PAPER_H_MM;
+    img.style.width = (mm * px) + 'px';
+    img.style.height = (mm * py) + 'px';
+    img.style.left = (sealXY.x * px) + 'px';
+    img.style.top = (sealXY.y * py) + 'px';
+    setText('seal-pos-why', '紙の左から ' + sealXY.x + 'mm ／ 上から ' + sealXY.y + 'mm に押します。'
+      + 'つまんで動かすか、下の欄で 細かく決められます。');
+  }
+  /** 紙の絵（本物の紙を そのまま縮めた物）。中身がまだ無い時は 見本の中身で描く。 */
+  function sealPaperHtml(org) {
+    var pi = paperInput();
+    if (pi) return fitInFrame(PAPER.build(Object.assign({}, pi, { org: org })).html);
+    var ln = [{ name: '（見本）', qty: '1', unit: '式', price: '30000', rate: 10 }];
+    var t = TAX.compute({ lines: ln, taxMode: 'exclusive', rounding: 'floor' });
+    return fitInFrame(PAPER.build({
+      inv: { no: '（見本）', issue_ymd: todayYmd(), kind: 'invoice', lines: ln,
+        totals: { grandTotal: t.grandTotal }, data: {} },
+      tax: t, partner: { name: '（取引先）', honor: '御中' }, org: org,
+      template: TPL.getOrDefault(settings().template),
+    }).html);
+  }
+  /** 紙の絵の中の 点 → 紙の mm（印の真ん中を その点に 合わせる） */
+  function sealPutAt(clientX, clientY) {
+    var stage = $('seal-stage'); if (!stage) return;
+    var r = stage.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    var mm = DOC.sealSizeMm($('seal-mm') ? $('seal-mm').value : (S.org || {}).sealSizeMm);
+    var x = ((clientX - r.left) / r.width) * DOC.PAPER_W_MM - mm / 2;
+    var y = ((clientY - r.top) / r.height) * DOC.PAPER_H_MM - mm / 2;
+    sealXY = { x: DOC.sealXY(x, mm, 'x'), y: DOC.sealXY(y, mm, 'y') };
+    sealTouched = true;
+    if ($('seal-x')) $('seal-x').value = sealXY.x;
+    if ($('seal-y')) $('seal-y').value = sealXY.y;
+    drawSealStage();
+  }
+  function bindSealStage() {
+    var stage = $('seal-stage'); if (!stage || stage.getAttribute('data-bound')) return;
+    stage.setAttribute('data-bound', '1');
+    var dragging = false;
+    /* ★指・マウス・ペン どれでも 動く様に 2通り 受ける★
+       ＝pointer だけに するのは 危ない。★本物のブラウザ（WebKit）で
+         マウスの pointerdown が 来ない事が 実際に在った（2026-08-31 実測）★。
+       ★二重に動かない★様に、pointer が来た端末では mouse/touch を 無視する。 */
+    var sawPointer = false;
+    var down = function (x, y) { dragging = true; sealPutAt(x, y); };
+    var move = function (x, y, e) { if (!dragging) return; if (e) e.preventDefault(); sealPutAt(x, y); };
+    var up = function () { dragging = false; };
+
+    stage.addEventListener('pointerdown', function (e) {
+      sawPointer = true;
+      try { stage.setPointerCapture(e.pointerId); } catch (err) { /* 取れなくても 動く */ }
+      down(e.clientX, e.clientY);
+    });
+    stage.addEventListener('pointermove', function (e) { move(e.clientX, e.clientY, e); });
+    stage.addEventListener('pointerup', up);
+    stage.addEventListener('pointercancel', up);
+
+    stage.addEventListener('mousedown', function (e) {
+      if (sawPointer) return;
+      e.preventDefault();
+      down(e.clientX, e.clientY);
+    });
+    stage.addEventListener('mousemove', function (e) { if (!sawPointer) move(e.clientX, e.clientY, e); });
+    stage.addEventListener('mouseup', function () { if (!sawPointer) up(); });
+    stage.addEventListener('mouseleave', function () { if (!sawPointer) up(); });
+
+    stage.addEventListener('touchstart', function (e) {
+      if (sawPointer || !e.touches || !e.touches[0]) return;
+      e.preventDefault();
+      down(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: false });
+    stage.addEventListener('touchmove', function (e) {
+      if (sawPointer || !e.touches || !e.touches[0]) return;
+      move(e.touches[0].clientX, e.touches[0].clientY, e);
+    }, { passive: false });
+    stage.addEventListener('touchend', function () { if (!sawPointer) up(); });
   }
 
   function pickSeal(file) {
@@ -2000,16 +2504,57 @@
       var chk = DOC.validateSeal(url);
       if (!chk.ok) { box('seal-err', chk.reason); sealPending = null; fillSeal(); return; }
       sealPending = url;
+      sealGuess = null;
       fillSeal();
       box('seal-ok', '下見に出しました。「保存」を押すと紙に出ます。');
+      applySealTools(url);
     };
     fr.onerror = function () { box('seal-err', 'この画像は読めませんでした。別の画像でお試しください。'); };
     fr.readAsDataURL(file);
   }
 
+  /** ★入れた判子を そろえて、形から 大きさを当てる★（司さん 2026-08-30「ハンコの情報あるんやけんやれや」）
+   *  ① 白抜き・余白切り・大きすぎたら縮める（道具は 借りた hanko.js）
+   *  ② その結果で 角印か 丸い印かを 見分けて mm を入れる
+   *  ★やった事は ぜんぶ 画面で言う（黙って いじらない）★
+   *  ★絵を読むのに 少し時間が要るので、下見は 先に出してある★ */
+  function applySealTools(url) {
+    var SEAL = global.SeikyuSeal;
+    if (!SEAL) return Promise.resolve();
+    /* ★返す★＝呼ぶ側（と 見張り）が「終わったか」を 待てる（待てない物は 測れない） */
+    return SEAL.prepare(url).then(function (r) {
+      if (sealPending !== url) return null;         // 途中で 別の画像に替えられていたら 捨てる
+      var next = (r && r.dataUrl) || url;
+      var did = (r && r.did) || [];
+      if (next !== url) {
+        /* ★そろえた物が 上限を超える事が ある★（写真をPNGにすると 太る）
+           ＝その時は ★元の画像のまま★にして、なぜ そのままかを 言う（黙って通さない）。 */
+        var chk = DOC.validateSeal(next);
+        if (!chk.ok) {
+          box('seal-ok', '判子をそろえてみましたが、' + chk.reason
+            + '。入れた画像を そのまま使います。');
+          next = url;
+          did = [];
+        } else {
+          sealPending = next;
+          fillSeal();
+        }
+      }
+      if (did.length) box('seal-ok', did.join('／') + '。「保存」を押すと紙に出ます。');
+      return SEAL.guessFromUrl(next).then(function (g) {
+        if (sealPending !== next && sealPending !== url) return;
+        sealGuess = g;
+        fillSeal();
+      });
+    }).catch(function () { /* そろえられなくても 下見は出ている＝入れた画像のまま */ });
+  }
+
   function saveSeal() {
     var mm = DOC.sealSizeMm($('seal-mm').value);
-    var patch = { sealSizeMm: mm };
+    sealGuess = null;                     // 保存したら「当てた値」ではなく「決まった値」
+    var xy = sealXYRead();
+    sealTouched = false;                  // 保存したら 倉庫の値が 正になる
+    var patch = { sealSizeMm: mm, sealX: xy.x, sealY: xy.y };
     if (sealPending) {
       var chk = DOC.validateSeal(sealPending);
       if (!chk.ok) { box('seal-err', chk.reason); return Promise.resolve(); }
@@ -2028,6 +2573,7 @@
   function clearSeal() {
     if (!global.confirm('角印を消しますか？\n（これから出す紙に印が付かなくなります。すでに出した紙は変わりません）')) return Promise.resolve();
     sealPending = null;
+    sealGuess = null;
     return S.store.org.save({ sealDataUrl: '' }).then(function (r) {
       if (!r.ok) { box('seal-err', '消せませんでした（' + r.reason + '）'); return; }
       S.org = r.data;
@@ -2066,6 +2612,25 @@
     $('s-carry').checked = s.carry;
     $('s-rows').value = (s.paperRows === null ? '' : s.paperRows);
     $('s-dedrows').value = (s.deductRows === null ? '' : s.deductRows);
+    /* ★紙の書き方（会社ごと）★＝空なら 様式の既定（何も選ばなければ 今までどおり） */
+    (function () {
+      var st = s.paperStyle || {};
+      $('s-sumsorder').value = (st.sumsOrder === 'B') ? 'B' : '';
+      $('s-yen').value = (st.yenMark === false) ? 'off' : '';
+      $('s-zeikomi').value = (st.zeikomiTag === false) ? 'off' : '';
+      $('s-bankline').value = (st.bankOneLine === true) ? 'one' : '';
+      $('s-subject').value = (st.subjectOn === true) ? 'on' : '';
+      $('s-taxnote').value = st.taxNote || '';
+      /* ★率は lib が唯一の正★＝画面の見本の文にも 数字を直書きしない
+         （法が変わった日に ★画面の文だけ 取り残される★のを止める） */
+      (function () {
+        var rs = (TAX.rates ? TAX.rates() : []) || [];
+        var top = rs.length ? Math.max.apply(null, rs.map(Number)) : null;
+        $('s-taxnote').placeholder = top ? ('例：消費税は' + top + '%となっております。') : '例：消費税について ひとこと';
+      })();
+      $('s-dedhead').value = st.dedHead || '';
+      $('s-dedsum').value = st.dedSum || '';
+    })();
     rowsHint();
     settingsHint();
 
@@ -2080,6 +2645,7 @@
     drawSetTpl(s.template);
     renderColEditor();
     fillSeal();
+    renderPaperAsk();   /* ★紙の作り（列・行数）の聞く形も 一緒に描き直す★ */
   }
 
   function drawSetTpl(id) {
@@ -2188,34 +2754,34 @@
       if (q.hint) h += '<p class="pask-hint">' + q.hint.replace(/★/g, '') + '</p>';
       if (q.guess) {
         h += '<div class="pask-guess">当てました：<b>' + esc(ptGuessLabel(q)) + '</b>'
-          + '<button class="pask-why" type="button" data-pask-why="' + esc(q.key) + '">なぜ？</button></div>';
+          + '<button class="pask-why btn-ghost" type="button" data-pask-why="' + esc(q.key) + '">なぜ？</button></div>';
       }
       if (q.kind === 'pick') {
         h += '<div class="pask-opts">' + q.options.map(function (o) {
           var on = (String(q.now) === String(o.v));
-          return '<button class="pask-o' + (on ? ' on' : '') + '" type="button" data-pask-pick="'
+          return '<button class="pask-o ' + (on ? 'on btn-primary' : 'btn-ghost') + '" type="button" data-pask-pick="'
             + esc(q.key) + '" data-v="' + esc(o.v) + '">' + esc(o.t) + '</button>';
         }).join('') + '</div>';
         if (q.key === 'payTerm' && (q.now === 'days' || q.now === 'nextDay')) {
           h += '<div class="pask-n"><input class="finput num" id="pask-n" type="text" inputmode="numeric" '
             + 'placeholder="日数" value="' + esc((d.payTerm && d.payTerm.n) || '') + '">'
-            + '<button class="pask-ok" type="button" data-pask-ok="payTerm">これで</button></div>';
+            + '<button class="pask-ok btn-primary" type="button" data-pask-ok="payTerm">これで</button></div>';
         }
       } else if (q.kind === 'yesno') {
         h += '<div class="pask-opts">'
-          + '<button class="pask-o' + (q.now === 'yes' ? ' on' : '') + '" type="button" data-pask-pick="' + esc(q.key) + '" data-v="yes">する</button>'
-          + '<button class="pask-o' + (q.now === 'no' ? ' on' : '') + '" type="button" data-pask-pick="' + esc(q.key) + '" data-v="no">しない</button>'
+          + '<button class="pask-o ' + (q.now === 'yes' ? 'on btn-primary' : 'btn-ghost') + '" type="button" data-pask-pick="' + esc(q.key) + '" data-v="yes">する</button>'
+          + '<button class="pask-o ' + (q.now === 'no' ? 'on btn-primary' : 'btn-ghost') + '" type="button" data-pask-pick="' + esc(q.key) + '" data-v="no">しない</button>'
           + '</div>';
       } else {
         var val = q.now || (q.guess ? q.guess.value : '');
         h += '<input class="finput" id="pask-t" type="text" value="' + esc(val) + '">';
         if (q.chips && q.chips.length) {
           h += '<div class="pask-chips">' + q.chips.map(function (c) {
-            return '<button class="pask-c" type="button" data-pask-chip="' + esc(c.v) + '">' + esc(c.t) + '</button>';
+            return '<button class="pask-c btn-ghost" type="button" data-pask-chip="' + esc(c.v) + '">' + esc(c.t) + '</button>';
           }).join('') + '</div>';
         }
-        h += '<div class="pask-row"><button class="pask-ok" type="button" data-pask-ok="' + esc(q.key) + '">これで</button>';
-        if (q.skipLabel) h += '<button class="pask-skip" type="button" data-pask-skip="' + esc(q.key) + '">' + esc(q.skipLabel) + '</button>';
+        h += '<div class="pask-row"><button class="pask-ok btn-primary" type="button" data-pask-ok="' + esc(q.key) + '">これで</button>';
+        if (q.skipLabel) h += '<button class="pask-skip btn-ghost" type="button" data-pask-skip="' + esc(q.key) + '">' + esc(q.skipLabel) + '</button>';
         h += '</div>';
       }
       h += '</div>';
@@ -2247,6 +2813,260 @@
     if (q.key === 'gensen') return g.value === 'yes' ? 'する' : 'しない';
     if (q.key === 'payTerm') return termLabel({ kind: g.value, n: 0 });
     return String(g.value);
+  }
+
+  /* ═══ ★この1通のことを 1問ずつ聞く★（件名・支払期限）════════════════════
+     ★別ウィザードを作らない★＝下の「細かく決める」と ★同じ値の 2つの見え方★。
+     ★見た目は 取引先の聞く形（pask）と同じ物を使う★＝作り直さない。
+     ★1問ごと保存★／★答えたら その場で返す★／★当てた物は 根拠を見せる★。 */
+  var IASK = (typeof window !== 'undefined' && window.SeikyuInvoiceAsk) || null;
+
+  function invAskCtx() {
+    var v = S.cur; if (!v || !IASK) return null;
+    var all = (S.list || []).filter(function (x) { return x && x.id !== v.id; });
+    var prev = all.filter(function (x) { return x.partner_id && x.partner_id === v.partner_id; })
+      .sort(function (a, b) { return String(b.issue_ymd || '').localeCompare(String(a.issue_ymd || '')); })[0] || null;
+    return {
+      inv: v, issue: v.issue_ymd || '', prev: prev, others: all,
+      partner: (S.partners || []).filter(function (x) { return x.id === v.partner_id; })[0] || null,
+      dueFrom: function (ymd, term) { return DOC.dueDateFrom(ymd, term); },
+      payTerms: DOC.PAY_TERMS,
+      answered: (v.data && v.data.askOk) || {},
+      /* ★今の設定で 紙に出るか★（返しの言葉を 設定に追わせる＝言い切らない） */
+      subjectOnPaper: subjectOnFor(v.partner_id),
+    };
+  }
+
+  function invAskHTML() {
+    var c = invAskCtx(); if (!c) return '';
+    var r = IASK.progress(c);
+    var h = '<div class="pask" data-iask="1">';
+    h += '<div class="pask-prog"><b>' + r.total + '問のうち ' + r.done + '問 答えました</b></div>';
+    var q = r.next;
+    if (!q) { h += '<p class="pask-fin">この1通のことは ぜんぶ決まっています。</p>'; }
+    else {
+      h += '<div class="pask-q"><div class="pask-qt">' + esc(q.q) + '</div>';
+      if (q.hint) h += '<p class="pask-hint">' + esc(q.hint) + '</p>';
+      if (q.guess) {
+        h += '<div class="pask-guess">当てました：<b>' + esc(q.guess.value) + '</b>'
+          + '<button class="pask-why btn-ghost" type="button" data-iask-why="' + esc(q.key) + '">なぜ？</button></div>';
+      }
+      var val = q.now || (q.guess ? q.guess.value : '');
+      h += '<input class="finput" id="iask-t" type="' + (q.kind === 'date' ? 'date' : 'text') + '" value="' + esc(val) + '">';
+      /* ★もう欄に入っている物は 札に出さない★（同じ字が2つ並ぶと 押す意味が無い） */
+      var chips = (q.chips || []).filter(function (c2) { return String(c2.v) !== String(val); });
+      if (chips.length) {
+        h += '<div class="pask-chips">' + chips.map(function (c2) {
+          return '<button class="pask-c btn-ghost" type="button" data-iask-chip="' + esc(c2.v) + '">' + esc(c2.v) + '</button>';
+        }).join('') + '</div>';
+      }
+      h += '<div class="pask-row"><button class="pask-ok btn-primary" type="button" data-iask-ok="' + esc(q.key) + '">これで</button>'
+        + '<button class="pask-skip btn-ghost" type="button" data-iask-skip="' + esc(q.key) + '">' + esc(q.skipLabel || '飛ばす') + '</button></div>';
+      h += '</div>';
+    }
+    /* 答えた物＝押すと 聞き直せる（その場の返しも 出す） */
+    var done = r.list.filter(function (x) { return x.done; });
+    if (done.length) {
+      h += '<div class="pask-done"><div class="pask-done-h">答えた物（押すと直せます）</div>'
+        + done.map(function (x) {
+          var now = (x.key === 'subject') ? ((S.cur.data && S.cur.data.subject) || '') : (S.cur.due_ymd || '');
+          var res = x.q.result ? x.q.result(now) : '';
+          return '<button class="pask-d" type="button" data-iask-again="' + esc(x.key) + '">'
+            + '<span class="pask-d-k">' + esc(x.key === 'subject' ? '件名' : '支払期限') + '</span>'
+            + '<span class="pask-d-v">' + esc(now || '（入れていません）') + '</span>'
+            + (res ? '<span class="pask-d-r">' + esc(res) + '</span>' : '')
+            + '</button>';
+        }).join('') + '</div>';
+    }
+    h += '</div>';
+    return h;
+  }
+
+  /* 押した時（★取引先の聞く形とは 別のハンドラ★＝混ぜると どちらの答えか 分からなくなる） */
+  function bindInvAsk() {
+    var host = $('inv-ask'); if (!host || host.dataset.bound) return;
+    host.dataset.bound = '1';
+    host.addEventListener('click', function (ev) {
+      var t = ev.target;
+      var why = t.closest && t.closest('[data-iask-why]');
+      if (why) {
+        var c = invAskCtx(); if (!c) return;
+        var q = IASK.progress(c).list.filter(function (x) { return x.key === why.dataset.iaskWhy; })[0];
+        var qq = (q && q.q) || IASK.questions(c).filter(function (x) { return x.key === why.dataset.iaskWhy; })[0];
+        if (qq && qq.guess) {
+          uiNote('どうして そう当てたか', esc(qq.q) + '：<b>' + esc(qq.guess.value) + '</b><br>'
+            + esc(qq.guess.why) + '<br><span class="pask-note">当てただけです。直せば そのまま変わります。</span>');
+        }
+        return;
+      }
+      var chip = t.closest && t.closest('[data-iask-chip]');
+      if (chip) { var i = $('iask-t'); if (i) { i.value = chip.dataset.iaskChip; i.focus(); } return; }
+      var okb = t.closest && t.closest('[data-iask-ok]');
+      if (okb) { invAskAnswer(okb.dataset.iaskOk, ($('iask-t') && $('iask-t').value) || ''); return; }
+      var skip = t.closest && t.closest('[data-iask-skip]');
+      if (skip) { invAskAnswer(skip.dataset.iaskSkip, ''); return; }
+      var again = t.closest && t.closest('[data-iask-again]');
+      if (again) {
+        var v = S.cur; if (!v) return;
+        var okm = Object.assign({}, (v.data && v.data.askOk) || {});
+        delete okm[again.dataset.iaskAgain];
+        /* ★聞き直す＝今の中身も 空に戻す★（でないと「入っている＝済み」で また出ない） */
+        if (again.dataset.iaskAgain === 'subject') { v.data.subject = ''; }
+        else if (again.dataset.iaskAgain === 'period') { v.data.lead = ''; }
+        else { v.due_ymd = ''; }
+        v.data.askOk = okm;
+        fillEdit();
+        renderInvAsk();
+      }
+    });
+  }
+
+  /* ═══ ★紙の作りを 1問ずつ聞く★（⑤明細の列・⑥紙の行数）════════════════
+     ★聞く前に 数える★＝出した請求書を数えて「使っていない列」「足りる行数」を当てる。
+     ★見た目は 取引先・この1通の聞く形（pask）と同じ物★＝作り直さない。
+     ★1問ごと保存★（答えた瞬間に 会社の設定へ書く）。 */
+  var PASK2 = (typeof window !== 'undefined' && window.SeikyuPaperAsk) || null;
+
+  function paperAskCtx() {
+    if (!PASK2 || !S.org) return null;
+    var st = settings();
+    var spec = COLS.normalizeSpec((S.org && S.org.invoiceCols) || TPL.getOrDefault(st.template).cols);
+    /* ★出した紙だけ 数える★（下書きは 実績ではない） */
+    var issued = (S.list || []).filter(function (v) { return v && v.status && v.status !== 'draft'; });
+    var def = TPL.getOrDefault(st.template);
+    return {
+      cols: spec, invoices: issued,
+      rows: st.paperRows, defaultRows: (def && def.rows) || PAPER.ROWS_FIRST || 0,
+      answered: (S.org && S.org.paperAskOk) || {},
+      cellOf: function (ln, col, i, sp) { return COLS.cellOf(ln, col, i, sp); },
+      roleOf: function (sp, col) { return COLS.roleOfIn(sp, col); },
+    };
+  }
+
+  function paperAskHTML() {
+    var c = paperAskCtx(); if (!c) return '';
+    var r = PASK2.progress(c);
+    var h = '<div class="pask" data-paskp="1">';
+    h += '<div class="pask-prog"><b>' + r.total + '問のうち ' + r.done + '問 答えました</b></div>';
+    var q = r.next;
+    if (!q) { h += '<p class="pask-fin">紙の作りは ぜんぶ決まっています。</p>'; }
+    else {
+      h += '<div class="pask-q"><div class="pask-qt">' + esc(q.q) + '</div>';
+      if (q.hint) h += '<p class="pask-hint">' + esc(q.hint) + '</p>';
+      if (q.guess) {
+        h += '<div class="pask-guess">当てました：<b>' + esc(String(q.guess.value)) + '</b>'
+          + '<button class="pask-why btn-ghost" type="button" data-paskp-why="' + esc(q.key) + '">なぜ？</button></div>';
+      }
+      if (q.kind === 'yesno') {
+        h += '<div class="pask-opts">'
+          + '<button class="pask-o btn-ghost" type="button" data-paskp-pick="' + esc(q.key) + '" data-v="yes">消す</button>'
+          + '<button class="pask-o btn-ghost" type="button" data-paskp-pick="' + esc(q.key) + '" data-v="no">このまま残す</button>'
+          + '</div>';
+      } else {
+        h += '<div class="pask-opts">' + (q.options || []).map(function (o) {
+          return '<button class="pask-o btn-ghost" type="button" data-paskp-pick="' + esc(q.key) + '" data-v="' + esc(o.v) + '">' + esc(o.t) + '</button>';
+        }).join('') + '</div>';
+      }
+      h += '</div>';
+    }
+    h += '</div>';
+    return h;
+  }
+
+  function renderPaperAsk() {
+    var card = $('paper-ask-card'), host = $('paper-ask');
+    if (!card || !host) return;
+    var c = paperAskCtx();
+    var on = !!(c && PASK2.progress(c).next);
+    show(card, on);
+    host.innerHTML = on ? paperAskHTML() : '';
+    bindPaperAsk();
+  }
+
+  /** ★1問ごと保存★（会社の設定へ書く。答えた印も 会社の設定に持つ） */
+  function paperAskAnswer(key, val) {
+    var c = paperAskCtx(); if (!c) return;
+    var q = PASK2.questions(c).filter(function (x) { return x.key === key; })[0];
+    if (!q) return;
+    if (/^col:/.test(key)) {
+      if (val === 'yes') {
+        var spec = COLS.normalizeSpec((S.org && S.org.invoiceCols) || TPL.getOrDefault(settings().template).cols);
+        var next = spec.items.filter(function (x) { return x !== q.col; });
+        var errs = COLS.validate(next);
+        if (errs.length) { box('col-err', errs.join(' ')); return; }   /* ★消せない時は 消さない★ */
+        spec.items = next;
+        S.org = Object.assign({}, S.org || {}, { invoiceCols: spec });
+      }
+    } else if (key === 'rows') {
+      S.org = Object.assign({}, S.org || {}, { invoicePaperRows: rowsSetting(val) });
+    }
+    var okm = Object.assign({}, (S.org && S.org.paperAskOk) || {});
+    okm[key] = true;
+    S.org = Object.assign({}, S.org || {}, { paperAskOk: okm });
+    box('col-ok', q.result ? q.result(val) : '');
+    fillSettings();
+    renderPaperAsk();
+    savePaperAsk();
+  }
+  /** ★保存できない時は 何もしない（「保存しました」と嘘を言わない）★ */
+  function savePaperAsk() {
+    if (!(S.store && S.store.org)) return;
+    S.store.org.save({
+      invoiceCols: S.org.invoiceCols, invoicePaperRows: S.org.invoicePaperRows, paperAskOk: S.org.paperAskOk,
+    }).then(function (r) {
+      if (!r || !r.ok) box('set-err', '保存できませんでした（' + ((r && r.reason) || '') + '）');
+      else if (r.data) S.org = r.data;
+    });
+  }
+
+  function bindPaperAsk() {
+    var host = $('paper-ask'); if (!host || host.dataset.bound) return;
+    host.dataset.bound = '1';
+    host.addEventListener('click', function (ev) {
+      var t = ev.target;
+      var why = t.closest && t.closest('[data-paskp-why]');
+      if (why) {
+        var c = paperAskCtx(); if (!c) return;
+        var q = PASK2.questions(c).filter(function (x) { return x.key === why.dataset.paskpWhy; })[0];
+        if (q && q.guess) {
+          uiNote('どうして そう当てたか', esc(q.q) + '<br>' + esc(q.guess.why).replace(/★/g, '')
+            + '<br><span class="pask-note">当てただけです。ちがう物を押せば そのまま変わります。</span>');
+        }
+        return;
+      }
+      var pick = t.closest && t.closest('[data-paskp-pick]');
+      if (pick) { paperAskAnswer(pick.dataset.paskpPick, pick.dataset.v); }
+    });
+  }
+
+  function renderInvAsk() {
+    var card = $('inv-ask-card'), host = $('inv-ask');
+    if (!card || !host) return;
+    var c = invAskCtx();
+    var on = !!(c && !locked() && IASK.progress(c).next);
+    show(card, on);
+    host.innerHTML = on ? invAskHTML() : '';
+    bindInvAsk();
+  }
+
+  /** ★1問ごと保存★（答えた瞬間に この1通へ書く。最後まで行かないと保存されない、にしない） */
+  function invAskAnswer(key, val) {
+    var v = S.cur; if (!v) return;
+    v.data = v.data || {};
+    if (key === 'subject') { v.data.subject = String(val == null ? '' : val).trim(); }
+    else if (key === 'due') { v.due_ymd = String(val == null ? '' : val).trim(); }
+    /* ★対象期間は 紙の頭の1行(lead)そのもの★＝★値の持ち主を 2つにしない★
+       （聞く形と 編集画面の「◯年◯月分」の欄が 同じ物を 指す） */
+    else if (key === 'period') { v.data.lead = String(val == null ? '' : val).trim(); }
+    var okm = Object.assign({}, v.data.askOk || {});
+    okm[key] = true;                                  // ★「飛ばす」も 答えたうち★（空のまま 何度も聞かない）
+    v.data.askOk = okm;
+    fillEdit();
+    renderInvAsk();
+    /* ★1問ごと保存★（最後まで行かないと保存されない、にしない）。
+       ★下書きにできない時（請求日や番号が空）は 黙って何もしない★＝
+       「保存しました」と嘘を言わない。その時は 下の「下書き保存」で残る。 */
+    if (v.issue_ymd && v.no && S.store && S.store.invoices) { saveDraft(); }
   }
 
   function renderPtAsk() {
@@ -2366,6 +3186,69 @@
     d.style.display = '';
   }
 
+  /* ══ ★この相手だけの紙★（司さん 2026-08-29）════════════════════════
+     ★何も選ばなければ 会社の既定のまま★＝今までと 1ドットも 変わらない。
+     決める順番は seikyu-scope.js が 1か所で持っている（画面で 別の判定をしない）。 */
+  /* ★押した時の配線は 描く時に する★（画面の他の所と 同じやり方）
+     ＝ログインの後だけ縛る形にすると ★試験で 1回も押せない★（2026-08-29 に踏んだ）。 */
+  function bindPartnerPaper() {
+    var box2 = $('s-ptpl'); if (!box2 || box2.dataset.bound) return;
+    box2.dataset.bound = '1';
+    ['s-ptpl', 's-prows', 's-psubject'].forEach(function (id) {
+      var el = $(id); if (!el) return;
+      /* ★選んだ その場で 効かせる★（保存を押すまで 何も変わらない、にしない） */
+      var run = function () {
+        var pp = partnerById($('s-partner') && $('s-partner').value);
+        if (!pp) return;
+        pp.data = pp.data || {};
+        pp.data.paper = partnerPaperFromForm(pp.id);
+        fillPartnerPaper(pp);
+        renderColEditor();
+      };
+      el.addEventListener('change', run);
+      el.addEventListener('input', run);
+    });
+    if ($('b-pcols-own')) $('b-pcols-own').addEventListener('click', function () { partnerColsOwn(true); });
+    if ($('b-pcols-clear')) $('b-pcols-clear').addEventListener('click', function () { partnerColsOwn(false); });
+  }
+
+  function fillPartnerPaper(p) {
+    var sel = $('s-ptpl'); if (!sel) return;
+    bindPartnerPaper();
+    var pp = SCOPE.partnerPaper(p);
+    var st = settings();
+    var defLabel = (TPL.getOrDefault(st.template).label || st.template);
+    sel.innerHTML = '<option value="">会社の既定のまま（' + esc(defLabel) + '）</option>'
+      + TPL.list().map(function (t) {
+        return '<option value="' + esc(t.id) + '">' + esc(t.label) + '</option>';
+      }).join('');
+    sel.value = pp.template || '';
+    $('s-prows').value = (pp.paperRows === undefined || pp.paperRows === null || pp.paperRows === '')
+      ? '' : String(pp.paperRows);
+    $('s-psubject').value = (pp.subjectOn === true) ? 'on' : ((pp.subjectOn === false) ? 'off' : '');
+    var own = !!(pp.cols && pp.cols.items && pp.cols.items.length);
+    show($('b-pcols-own'), !own);
+    show($('b-pcols-clear'), own);
+    setText('s-pcols-hint', own
+      ? ('この相手だけの列です（' + pp.cols.items.length + '本）。下の「明細の列」で 直せます。')
+      : '今は 会社の既定の列です。');
+  }
+  /** この相手だけの列を 作る（★会社の今の列を 写してから 直す★＝白紙から作らせない） */
+  function partnerColsOwn(on) {
+    var id = $('s-partner') && $('s-partner').value;
+    var p = partnerById(id); if (!p) return;
+    p.data = p.data || {};
+    p.data.paper = Object.assign({}, p.data.paper || {});
+    if (on) {
+      var st = settings();
+      p.data.paper.cols = COLS.normalizeSpec(st.cols || TPL.getOrDefault(st.template).cols);
+    } else {
+      delete p.data.paper.cols;
+    }
+    fillPartnerPaper(p);
+    renderColEditor();
+  }
+
   function fillPartnerForm(id) {
     var p = partnerById(id);
     var d = (p && p.data) || {};
@@ -2382,8 +3265,11 @@
     $('s-ptermn').value = t.n || '';
     show($('s-ptermn'), t.kind === 'days' || t.kind === 'nextDay');
     $('s-pgensen').checked = !!d.gensen;
+    fillPartnerPaper(p);
     var on = !!p;
-    ['s-pcode', 's-phonor', 's-pperson', 's-paddr', 's-pzip', 's-ptel', 's-pinvoice', 's-pterm', 's-ptermn', 's-pgensen'].forEach(function (x) { $(x).disabled = !on; });
+    ['s-pcode', 's-phonor', 's-pperson', 's-paddr', 's-pzip', 's-ptel', 's-pinvoice', 's-pterm', 's-ptermn', 's-pgensen',
+      's-ptpl', 's-prows', 's-psubject'].forEach(function (x) { if ($(x)) $(x).disabled = !on; });
+    ['b-pcols-own', 'b-pcols-clear'].forEach(function (x) { if ($(x)) $(x).disabled = !on; });
     $('b-pt-save').disabled = !on;
   }
 
@@ -2409,6 +3295,19 @@
       invoiceDeductRows: rowsSetting($('s-dedrows').value),
       invoiceTemplate: settings().template,
       invoiceCols: COLS.normalizeSpec((S.org && S.org.invoiceCols) || TPL.getOrDefault(settings().template).cols),
+      /* ★選ばなかった物は 持たない★＝様式の既定が効く（空の値を保存して 既定を上書きしない） */
+      invoiceStyle: (function () {
+        var o = {};
+        if ($('s-sumsorder').value === 'B') o.sumsOrder = 'B';
+        if ($('s-yen').value === 'off') o.yenMark = false;
+        if ($('s-zeikomi').value === 'off') o.zeikomiTag = false;
+        if ($('s-bankline').value === 'one') o.bankOneLine = true;
+        if ($('s-subject').value === 'on') o.subjectOn = true;
+        if (String($('s-taxnote').value || '').trim()) o.taxNote = String($('s-taxnote').value).trim();
+        if (String($('s-dedhead').value || '').trim()) o.dedHead = String($('s-dedhead').value).trim();
+        if (String($('s-dedsum').value || '').trim()) o.dedSum = String($('s-dedsum').value).trim();
+        return o;
+      })(),
     };
     var errs = DOC.validateNumbering({ format: patch.numbering.invoice.format, resetYearly: patch.numbering.invoice.resetYearly, partnerCode: 'A001' });
     var cerrs = COLS.validate(patch.invoiceCols.items);
@@ -2447,6 +3346,25 @@
     });
   }
 
+  /** 画面の3つ＋列 を ひとまとめに（★空欄は 入れない＝会社の既定のまま★） */
+  function partnerPaperFromForm(id) {
+    var now = SCOPE.partnerPaper(partnerById(id));
+    var out = {};
+    var tpl = $('s-ptpl') ? $('s-ptpl').value : '';
+    if (tpl && TPL.get(tpl)) out.template = tpl;
+    var rows = $('s-prows') ? String($('s-prows').value).trim() : '';
+    if (rows !== '') {
+      var n = Number(rows);
+      if (Number.isFinite(n) && n >= 0) out.paperRows = Math.trunc(n);
+    }
+    var sj = $('s-psubject') ? $('s-psubject').value : '';
+    if (sj === 'on') out.subjectOn = true;
+    else if (sj === 'off') out.subjectOn = false;
+    /* 列は ボタンで作る物（フォームの欄ではない）＝今の物を そのまま持ち越す */
+    if (now.cols && now.cols.items && now.cols.items.length) out.cols = now.cols;
+    return out;
+  }
+
   function savePartner() {
     var id = $('s-partner').value;
     if (!id) { box('pt-err', '先に取引先を選んでください。'); return Promise.resolve(); }
@@ -2462,6 +3380,8 @@
       invoiceNo: TOROKU.check($('s-pinvoice').value).no,
       payTerm: { kind: kind, n: Math.trunc(Number($('s-ptermn').value) || 0) },
       gensen: $('s-pgensen').checked,   // ★源泉の対象かは相手が決める（この相手の既定）
+      /* ★この相手だけの紙★（空＝会社の既定のまま） */
+      paper: partnerPaperFromForm(id),
     };
     /* ★「ぜんぶ見る」で自分で入れた物も『答えた』にする★
        ＝ここで入れたのに あとから同じ事を聞かれる（＝2度 聞く）のを止める。 */
@@ -2620,6 +3540,13 @@
     $('fn-cancel').onclick = fnClose;
 
     $('b-save').onclick = function () { return saveDraft(); };
+    if ($('b-pdf')) $('b-pdf').onclick = function () { askName('pdf', function (n) { doPdf(n, 'save'); }); };
+    /* ★開く★＝iPhoneのビューアへ渡す（そこの共有ボタンで メールに乗る） */
+    if ($('b-pdfopen')) $('b-pdfopen').onclick = function () { askName('pdf', function (n) { doPdf(n, 'open'); }); };
+    /* ★納品書★＝同じ1通を 納品書の顔で PDFにして 開く（送るところまで 同じ道） */
+    if ($('b-delivery')) $('b-delivery').onclick = function () {
+      askName('pdf', function (n) { doPdf(n, 'open', 'delivery'); });
+    };
     $('b-issue').onclick = function () { return issue(); };
 
     /* ★入金★ 打つたびに「押せる/押せない」を塗り直す（黙って無反応にしない） */
@@ -2645,6 +3572,34 @@
     });
     $('pay-method').onchange = drawPayButton;
 
+    /* ★集計する月を 変える★（選んだ月は 覚えておく＝押すたびに 戻らない） */
+    /* ★探す★＝打つたびに 絞る（押させない）。★やめる は 1押しで 元に戻す★ */
+    ['q-text', 'q-from', 'q-to', 'q-min', 'q-max'].forEach(function (id) {
+      var el = $(id); if (!el) return;
+      el.oninput = function () { renderList(); };
+    });
+    if ($('b-q-clear')) $('b-q-clear').onclick = function () {
+      ['q-text', 'q-from', 'q-to', 'q-min', 'q-max'].forEach(function (id) {
+        var el = $(id); if (el) el.value = '';
+      });
+      renderList();
+    };
+    if ($('rep-month')) $('rep-month').onchange = function () {
+      repMonth = $('rep-month').value; renderReport();
+    };
+    /* ★動かしたら その場で 絵が変わる★（押さないと分からない、を作らない） */
+    ['seal-mm', 'seal-x', 'seal-y'].forEach(function (id) {
+      var el = $(id);
+      if (el) el.oninput = function () { sealTouched = true; sealXY = sealXYRead(); drawSealStage(); };
+    });
+    bindSealStage();
+    if ($('b-seal-home')) $('b-seal-home').onclick = function () {
+      sealTouched = true;
+      sealXY = { x: null, y: null };
+      if ($('seal-x')) $('seal-x').value = '';
+      if ($('seal-y')) $('seal-y').value = '';
+      drawSealStage();
+    };
     $('b-seal-save').onclick = function () { return saveSeal(); };
     $('b-seal-clear').onclick = function () { return clearSeal(); };
     $('seal-file').onchange = function (e) { pickSeal(e.target.files && e.target.files[0]); };
@@ -2723,11 +3678,40 @@
     _fillSettings: fillSettings,
     _loadMasters: function () { return loadMasters(true); },   // テストから1回だけ読ませる
     _recalcForTest: function () { return recalc(); },          // テスト用: 数え直しだけ走らせる
+    _fillEdit: fillEdit,          // テスト用: 入力の画面を描き直す（★見られない物は 見張れない★）
+    _invAskAnswer: function (k, v) { return invAskAnswer(k, v); },   // テスト用: 聞く形に答える
+    _saveDraftForTest: function () { return saveDraft(); },          // テスト用: 下書き保存を そのまま走らせる
+    _renderListForTest: function () { return renderList(); },        // テスト用: 一覧を 描き直す
+    _reportForTest: function (m) { return reportOf(m); },            // テスト用: 集計の数だけ取る
+    /* テスト用: ★本物の紙★を そのまま返す（見張りが 紙の中身を数える為。
+       ★画面と同じ道を通す★＝紙だけ別の作り方をしない） */
+    _paperHtml: function () {
+      var pi = paperInput();
+      if (!pi) return '';
+      var built = PAPER.build(pi);
+      return (typeof built === 'string') ? built : ((built && built.html) || '');
+    },
     _renderPayForTest: function () { return renderPay(); },    // テスト用: 入金の箱だけ描き直す
+    _itemsForTest: function () { itemsCache = null; return itemList(); },  // テスト用: 覚えた品目
+    _duplicateForTest: function () { return duplicateCur(); }, // テスト用: 複製を そのまま走らせる
+    /* テスト用: ★ボタンに 手を紐づける所だけ★ 走らせる（attach は倉庫に つなぎに行くので
+       倉庫の無い試験からは 押せない＝「ボタンが在る」で 終わらせない為の 穴） */
+    _bindForTest: function () { return bind(); },
+    _paperBtnsForTest: function () { return PAPER_BTNS.slice(); },   // テスト用: 門を掛ける相手の一覧
+    _sealStageForTest: function () { bindSealStage(); return drawSealStage(); },
+    _sealPutAtForTest: function (x, y) { return sealPutAt(x, y); },
+    _sealXYForTest: function () { return sealXY; },
+    _saveSealForTest: function () { return saveSeal(); },       // テスト用: 保存を そのまま走らせる
     _pickSealUrl: function (url) {           // テスト用: ファイル選択の代わりに data URL を渡す
       var chk = DOC.validateSeal(url);
-      if (!chk.ok) { box('seal-err', chk.reason); sealPending = null; fillSeal(); return chk; }
-      sealPending = url; fillSeal(); return chk;
+      if (!chk.ok) { box('seal-err', chk.reason); sealPending = null; sealGuess = null; fillSeal(); return chk; }
+      sealPending = url; sealGuess = null; fillSeal();
+      var SEAL = global.SeikyuSeal;
+      if (!SEAL) return chk;
+      /* ★そろえて 当て終わるのを 待てる形で返す★（見張りが「その後」を見られるように） */
+      return Object.assign({}, chk, {
+        guessed: Promise.resolve(applySealTools(url)).then(function () { return sealGuess; }),
+      });
     },
   };
 })(window);

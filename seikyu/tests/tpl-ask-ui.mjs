@@ -50,7 +50,7 @@ async function measureShape(doc) {
   if (!CHROME) throw new Error('★ブラウザが見つかりません＝形を測れません（0と言わない）★');
   const os = await import('node:os');
   const { execFileSync } = await import('node:child_process');
-  const OUT = path.join(os.tmpdir(), 'rakually-tpl-shape');
+  const OUT = path.join(os.tmpdir(), 'rakunally-tpl-shape');
   fs.mkdirSync(OUT, { recursive: true });
   doc.querySelectorAll('script').forEach((x) => x.remove());
   /* ★ログイン前は <div id="app" hidden> で丸ごと隠れている★（auth.js が開ける）。
@@ -131,7 +131,7 @@ async function boot(appSrc) {
   win.__mkSb = () => m.exports.createFakeSupa({
     uid: 'u1',
     tables: {
-      pay_org: [{ account_id: 'u1', data: { yago: '合同会社Rakually', invoiceNo: 'T3500003003293' }, updated_at: '2026-08-01T00:00:00Z' }],
+      pay_org: [{ account_id: 'u1', data: { yago: '合同会社Rakunally', invoiceNo: 'T3500003003293' }, updated_at: '2026-08-01T00:00:00Z' }],
       pay_partners: [{ id: 'pt_a', account_id: 'u1', sort: 0, data: { name: 'A株式会社', keisho: '御中' }, deleted_at: null }],
       pay_invoices: [], pay_receipts: [],
       pay_companies: [{ account_id: 'u1', data: {}, updated_at: '2026-08-01T00:00:00Z' }],
@@ -139,7 +139,7 @@ async function boot(appSrc) {
     pk: { pay_org: 'account_id', pay_companies: 'account_id' },
     unique: { pay_invoices: [['account_id', 'doc_type', 'no']] },
   });
-  const DROP = ['supa-config.js', 'auth.js', 'env-badge.js', 'store.js', 'rakually-login.js'];
+  const DROP = ['supa-config.js', 'auth.js', 'env-badge.js', 'store.js', 'rakunally-login.js'];
   for (const mm of html.matchAll(/<script src="([^"]+)"><\/script>/g)) {
     const s = mm[1].split('?')[0], base = s.split('/').pop();
     if (/^https?:/.test(s) || DROP.includes(base)) continue;
@@ -169,12 +169,19 @@ async function run(label, appSrc) {
     ok(/どの紙で出しますか/.test(card.textContent || ''), '問いの字が違う');
   });
 
-  await T('② ★見本を一緒に見せる／2枚は 別の絵★（同じ絵なら 見本が嘘）', async () => {
+  /* ★様式の数を 決め打ちしない★（2026-08-27 3つ目を足した日に ここが赤くなった）
+     ＝★lib(seikyu-templates.js)が持つ数が 正★。足した日に 試験を直さなくてよい形にする。 */
+const TPL_N = (function () {
+  const T2 = require_(path.join(ROOT, 'seikyu/lib/seikyu-templates.js'));
+  return T2.list().length;
+})();
+
+  await T('② ★見本を一緒に見せる／' + TPL_N + '枚とも 別の絵★（同じ絵なら 見本が嘘）', async () => {
     const { doc } = await boot(appSrc);
     const shots = [...doc.querySelectorAll('.tpl-shot iframe')].map((f) => f.getAttribute('srcdoc') || '');
-    eq(shots.length, 2, '見本の数');
-    ok(shots[0].length > 500 && shots[1].length > 500, '★見本が空＝描けていない★');
-    ok(shots[0] !== shots[1], '★見本2枚が 同じ絵＝様式が効いていない（見本が嘘）★');
+    eq(shots.length, TPL_N, '見本の数');
+    shots.forEach((x, i) => ok(x.length > 500, '★' + (i + 1) + '枚目の見本が空＝描けていない★'));
+    ok(new Set(shots).size === shots.length, '★同じ絵が混ざっている＝様式が効いていない（見本が嘘）★');
   });
 
   await T('③ ★選ぶと その場で畳んで 1行になる★（1問ごと保存）', async () => {
@@ -205,7 +212,7 @@ async function run(label, appSrc) {
     const { doc } = await boot(appSrc);
     const j = await measureShape(doc);
     eq(j.vw, 390, '390pxで測れていない');
-    eq(j.shots.length, 2, '見本の数');
+    eq(j.shots.length, TPL_N, '見本の数');
     j.shots.forEach((s2, i) => {
       const katachi = s2.w / s2.h;
       ok(Math.abs(katachi - 210 / 297) < 0.03,
@@ -250,7 +257,18 @@ async function run(label, appSrc) {
     doc.getElementById('e-partner').value = '';
     win.SeikyuApp._recalcForTest();
     await sleep(200);
-    ok(doc.getElementById('b-print').disabled, '★相手が無いのに 印刷が押せる★');
+    /* ★1つだけ見て「門は効いている」と言わない★＝★紙から作る物 ぜんぶ★を見る
+       （2026-08-30 実際に b-pdf だけ 門から漏れていた） */
+    const btns = win.SeikyuApp._paperBtnsForTest();
+    ok(btns.length >= 4, '★門を掛ける相手が ' + btns.length + '個＝数えられていない★');
+    const open = btns.filter((id) => { const b = doc.getElementById(id); return b && !b.disabled; });
+    ok(!open.length, '★相手が無いのに まだ押せる★ ' + open.join(' / '));
+    /* ★画面に在る「紙から作る物」が 一覧から漏れていないか★（漏れたら 門が掛からない） */
+    const inBox = [...doc.getElementById('out-box').querySelectorAll('button')]
+      .map((b) => b.id).filter((id) => id && id !== 'b-save');
+    const miss = inBox.filter((id) => btns.indexOf(id) < 0);
+    ok(!miss.length, '★門の一覧から 漏れている出し口★ ' + miss.join(' / '));
+    console.log('     門を掛けた ' + btns.join(' / ') + '（' + inBox.length + '個ぜんぶ）');
     const g = doc.getElementById('paper-gate');
     ok(g && g.style.display !== 'none' && /だれに/.test(g.textContent || ''),
       '★押せない理由が出ていない★ 出た字: ' + (g ? g.textContent : 'なし'));
