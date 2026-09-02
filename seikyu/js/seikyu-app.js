@@ -75,7 +75,9 @@
 
   /* ═══ 画面の切り替え ═══ */
   function goScreen(id) {
-    ['scr-list', 'scr-edit', 'scr-set'].forEach(function (s) {
+    /* ★画面の一覧は 1か所★＝ここに足し忘れると ★タブは光るのに 中身が真っ白★
+       （2026-08-31 実際にそうなった＝請求/集計を足した日） */
+    ['scr-list', 'scr-edit', 'scr-set', 'scr-bill'].forEach(function (s) {
       var el = $(s); if (el) el.classList.toggle('active', s === id);
     });
     Array.prototype.forEach.call(document.querySelectorAll('.bn'), function (b) {
@@ -350,6 +352,132 @@
   function findQuery() {
     return { text: ($('q-text') || {}).value, from: ($('q-from') || {}).value,
       to: ($('q-to') || {}).value, min: ($('q-min') || {}).value, max: ($('q-max') || {}).value };
+  }
+
+  /* ═══ ★請求 / 集計★ ═══
+     （司さん 2026-08-31「代行請求書アプリのように 請求書／集計を作って 見せ方も一緒にしろ
+       なにがどこにあるとか ごちゃごちゃで分かりにくい」）
+     ＝★月と相手を選ぶ → その紙が すぐ出る → PDF／印刷／Excel★。探し回らせない。
+     ・出す物は ★もう作った請求書★（ここで 新しく作りはしない）
+     ・数え方は seikyu-report が唯一の正（ここでは 1つも数え直さない） */
+  var billPick = { ym: null, pid: null };
+
+  function billList() {
+    return (S.invoices || []).filter(function (v) {
+      return (v.doc_type || 'invoice') === 'invoice' && v.status !== 'void';
+    });
+  }
+  function billYm(v) {
+    var t = String((v && v.issue_ymd) || '');
+    return /^\d{4}-\d{2}/.test(t) ? t.slice(0, 7) : '';
+  }
+  /** 今 選ばれている1通（無ければ null） */
+  function billCurrent() {
+    var rows = billList().filter(function (v) {
+      if (billPick.ym && billYm(v) !== billPick.ym) return false;
+      if (billPick.pid && String(v.partner_id || '') !== billPick.pid) return false;
+      return true;
+    });
+    rows.sort(function (a, b) { return String(b.issue_ymd || '').localeCompare(String(a.issue_ymd || '')); });
+    return { row: rows[0] || null, n: rows.length };
+  }
+  function renderBill() {
+    var host = $('bill-month'); if (!host) return;
+    var rows = billList();
+    /* 月の一覧（新しい順）＝出した紙が在る月だけ */
+    var yms = [], seen = {};
+    rows.forEach(function (v) { var m = billYm(v); if (m && !seen[m]) { seen[m] = 1; yms.push(m); } });
+    yms.sort().reverse();
+    if (billPick.ym === null) billPick.ym = yms[0] || '';
+    host.innerHTML = '<option value="">月をぜんぶ</option>' + yms.map(function (m) {
+      return '<option value="' + esc(m) + '"' + (m === billPick.ym ? ' selected' : '') + '>'
+        + esc(m.slice(0, 4) + '年' + String(Number(m.slice(5, 7))) + '月') + '</option>';
+    }).join('');
+    host.value = billPick.ym || '';
+
+    /* 相手の一覧＝出した紙が在る相手だけ */
+    var ps = [], pseen = {};
+    rows.forEach(function (v) {
+      var id = String(v.partner_id || '');
+      if (!id || pseen[id]) return;
+      pseen[id] = 1; ps.push({ id: id, name: partnerName(v) });
+    });
+    var sel = $('bill-partner');
+    sel.innerHTML = '<option value="">相手をぜんぶ</option>' + ps.map(function (x) {
+      return '<option value="' + esc(x.id) + '"' + (x.id === billPick.pid ? ' selected' : '') + '>'
+        + esc(x.name) + '</option>';
+    }).join('');
+    sel.value = billPick.pid || '';
+
+    /* 集計（数え方は seikyu-report が唯一の正） */
+    var REP = global.SeikyuReport;
+    if (REP) {
+      var s2 = REP.summarize({ invoices: S.invoices || [], receipts: S.receipts,
+        partners: S.partners || [], month: billPick.ym || '', kind: 'invoice', doc: DOC });
+      var unk = (s2.totals.paid === null);
+      setText('bill-sum', (billPick.ym ? (billPick.ym.slice(0, 4) + '年' + Number(billPick.ym.slice(5, 7)) + '月')
+        : 'ぜんぶ') + '　請求 ' + yen(s2.totals.total) + ' 円'
+        + '　入金 ' + (unk ? '（未確認）' : yen(s2.totals.paid) + ' 円')
+        + '　残り ' + (unk ? '（未確認）' : yen(s2.totals.remain) + ' 円')
+        + '　（' + s2.totals.count + '通）');
+    }
+
+    /* 紙 */
+    var cur = billCurrent();
+    var fr = $('bill-paper');
+    var acts = $('bill-acts');
+    if (!cur.row) {
+      show(acts, false);
+      fr.srcdoc = '<!doctype html><meta charset="utf-8"><body style="margin:0;font:13px sans-serif;'
+        + 'color:#6E6E6E;display:flex;align-items:center;justify-content:center;height:100%;'
+        + 'text-align:center;padding:12px;box-sizing:border-box">'
+        + (rows.length ? 'この月・この相手の請求書は まだありません' : 'まだ請求書がありません')
+        + '</body>';
+      setText('bill-note', rows.length ? '別の月か 別の相手を選んでください。' : '「入力」から 1通 作ってください。');
+      return;
+    }
+    show(acts, true);
+    /* ★選んだ1通で 紙を作る★＝作りかけの1通を 壊さない様に 一時的に 差し替えて 戻す
+       （紙の作り方は paperInput 1本＝2つ目の作り方を 作らない） */
+    var v = cur.row, keep = S.cur, pi = null;
+    S.cur = v;
+    try { pi = paperInput(); } finally { S.cur = keep; }
+    if (!pi) {
+      show(acts, false);
+      setText('bill-note', 'この請求書は 中身がまだ整っていないので 紙が出せません。');
+      return;
+    }
+    var html = fitInFrame(PAPER.build(pi).html);
+    if (fr.getAttribute('data-h') !== String(html.length)) {
+      fr.setAttribute('data-h', String(html.length));
+      fr.srcdoc = html;
+    }
+    setText('bill-note', esc(v.no || '（未採番）') + '　' + esc(partnerName(v)) + '　'
+      + esc(v.issue_ymd || '日付なし')
+      /* ★言っていない事を 言わない★＝相手を選んでいない時に「この相手で」と書かない */
+      + (cur.n > 1 ? '　※' + (billPick.ym ? 'この月' : '') + (billPick.pid ? 'この相手' : '')
+        + (billPick.ym || billPick.pid ? 'で ' : '') + cur.n + '通あります（新しい1通を出しています）'
+        + (billPick.pid ? '' : '　相手を選ぶと 1通に しぼれます') : ''));
+  }
+  /** 選んだ1通で 出す（作りかけの1通に 手を出さない＝一時的に 差し替えて 戻す） */
+  function billDo(how) {
+    var cur = billCurrent();
+    if (!cur.row) { box('bill-err', 'この月・この相手の請求書がありません。'); return; }
+    var keep = S.cur;
+    var ext = (how === 'xlsx') ? 'xlsx' : 'pdf';
+    S.cur = cur.row;                                   /* 名前も 紙も この1通で 作る */
+    var n = suggestName(ext);
+    S.cur = keep;
+    if (!n) { box('bill-err', 'この請求書は 中身がまだ整っていないので 出せません。'); return; }
+    askNameWith(n, ext, function (name) {
+      var k2 = S.cur;
+      S.cur = cur.row;
+      try {
+        if (how === 'pdf') doPdf(name, 'open');
+        else if (how === 'print') doPrint(name);
+        else doExcel(name);
+      } finally { S.cur = k2; }
+    });
   }
 
   function renderList() {
@@ -658,11 +786,20 @@
     })).html);
     /* ★作り物の見本を置かない★（司さん 2026-08-18 代行請求で同じ事を言われている:
        「他のアプリは実際の見せとんのに なんでこれだけ意味わからんやり方なんど」）
-       ⇒ 紙が作れない時は ★何をすれば出るか★ を書く（代行請求と同じ言い方）。 */
-    return '<!doctype html><meta charset="utf-8"><body style="margin:0;font:12px sans-serif;'
-      + 'color:#555555;display:flex;align-items:center;justify-content:center;height:100%;'
-      + 'text-align:center;padding:8px;box-sizing:border-box">'
-      + '明細を1件 入れると<br>ここに実際の紙が出ます</body>';
+       ⇒ 作りかけの1通が 無い時は ★見本の中身で 本物の紙を組む★（字で言い訳しない）。
+       ★設定から選ぶ時は 作りかけの1通が 無いのが ふつう★なので、
+       ここで「明細を1件 入れると…」と書くと ★3枚とも 同じ字の板★になり 選べない
+       （2026-08-31 実際に そうなった）。 */
+    var ln = [{ name: '（見本）品名', qty: '1', unit: '式', price: '30000', rate: 10 }];
+    var t = TAX.compute({ lines: ln, taxMode: 'exclusive', rounding: 'floor' });
+    return fitInFrame(PAPER.build({
+      inv: { no: '（見本）', issue_ymd: todayYmd(), kind: 'invoice', lines: ln,
+        totals: { grandTotal: t.grandTotal }, data: {}, template_id: id },
+      tax: t, partner: { name: '（取引先）', honor: '御中' },
+      org: Object.assign({}, S.org || {}, { bank: settings().bank }),
+      template: TPL.getOrDefault(id), templateId: id,
+      cols: COLS.normalizeSpec(TPL.getOrDefault(id).cols),
+    }).html);
   }
 
   function renderTplAsk() {
@@ -2038,6 +2175,19 @@
 
   function doExcel(name) {
     var pi = paperInput(); if (!pi) return;
+    /* ★自社のExcelを 覚えていれば そちらに 入れて出す★（覚えていなければ 今まで通り） */
+    var b = bookExcel(name);
+    if (b) {
+      box('edit-ok', '自社の Excel に 入れています…');
+      b.then(function (out) {
+        box('edit-ok', '自社の Excel に 入れて 出しました（書いたセル ' + out.wrote.length + '個'
+          + (out.skipped.length ? '／入れられなかった ' + out.skipped.length + '個' : '') + '）。');
+      }).catch(function (e) {
+        box('edit-err', '自社の Excel に 入れられませんでした（' + (e && e.message) + '）。'
+          + '設定の「自社の請求書（Excel）を使う」で 読み直してください。');
+      });
+      return;
+    }
     var sheet = AOA.build(pi);
     OUT.excel(sheet, name)
       .then(function () { box('edit-ok', name + ' を保存しました。'); })
@@ -2191,8 +2341,42 @@
 
   /* ═══ 様式（テンプレ）を選ぶ ═══
      ★変わるのは見た目だけ。金額は1円も動かない（seikyu-templates.js が守る）★ */
+  /** ★様式は 絵で選ぶ★（司さん 2026-08-31「テンプレ選ぶ所も分かりにくい」
+   *  ＝字だけの札では ★何が違うか 分からない★。入力の見本と ★同じ物★を 設定にも出す。
+   *  ★見本は 本物の紙★（作り物の絵を置かない）。 */
+  function renderTplPicks(host, current, onPick) {
+    host.innerHTML = '';
+    TPL.list().forEach(function (t) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tpl-pick' + (t.id === current ? ' on' : '');
+      b.setAttribute('data-tpl', t.id);
+      var bg = document.createElement('div'); bg.className = 'tpl-badge'; bg.textContent = '✓';
+      b.appendChild(bg);
+      var shot = document.createElement('div'); shot.className = 'tpl-shot';
+      var f = document.createElement('iframe');
+      f.setAttribute('title', t.label + ' の見本');
+      f.setAttribute('tabindex', '-1');
+      f.style.width = '100%'; f.style.height = '100%';
+      f.srcdoc = tplSampleHtml(t.id);
+      shot.appendChild(f);
+      var nm = document.createElement('div'); nm.className = 'tpl-nm'; nm.textContent = t.label;
+      var no = document.createElement('div'); no.className = 'tpl-note'; no.textContent = t.note || '';
+      b.appendChild(shot); b.appendChild(nm); b.appendChild(no);
+      b.onclick = function () { onPick(t.id); };
+      host.appendChild(b);
+    });
+  }
+
   function renderTplSeg(hostId, noteId, current, onPick, disabled) {
     var host = $(hostId); if (!host) return;
+    /* ★設定の様式は 絵で選ぶ★（押せない時＝発行済みは 今まで通り 字の札のまま） */
+    if (hostId === 's-tpl' && !disabled) {
+      host.className = 'tpl-list';
+      renderTplPicks(host, current, onPick);
+      if (noteId) setText(noteId, '');            /* 説明は 札の中に 書いてある＝2回 言わない */
+      return;
+    }
     host.innerHTML = TPL.list().map(function (t) {
       return '<button class="seg-b' + (t.id === current ? ' on' : '') + '" type="button" data-tpl="'
         + esc(t.id) + '"' + (disabled ? ' disabled' : '') + '>' + esc(t.label) + '</button>';
@@ -2230,6 +2414,7 @@
   }
 
   function renderColEditor() {
+    drawSetPaper();                       /* ★列を触ったら 紙も 変える★ */
     var host = $('col-list'); if (!host) return;
     var spec = COLS.normalizeSpec(editCols());
     var w = COLS.widthsOf(spec.items, spec.widths);
@@ -2362,6 +2547,7 @@
     if ($('seal-x')) $('seal-x').value = (sealXY.x === null ? '' : sealXY.x);
     if ($('seal-y')) $('seal-y').value = (sealXY.y === null ? '' : sealXY.y);
     drawSealStage();
+    drawSetPaper();
     setText('seal-why', (sealGuess ? sealGuess.why + '（違う時は 上の数を 直してください）' : '')
       + '大きさは ' + DOC.SEAL_MIN_MM + '〜' + DOC.SEAL_MAX_MM + 'mm の間だけ（既定 '
       + DOC.SEAL_DEFAULT_MM + 'mm）。画像は ' + Math.round(DOC.SEAL_MAX_BYTES / 1024) + 'KB まで。'
@@ -2426,17 +2612,19 @@
       + 'つまんで動かすか、下の欄で 細かく決められます。');
   }
   /** 紙の絵（本物の紙を そのまま縮めた物）。中身がまだ無い時は 見本の中身で描く。 */
-  function sealPaperHtml(org) {
+  function sealPaperHtml(org, extra) {
+    var ex = extra || {};
     var pi = paperInput();
-    if (pi) return fitInFrame(PAPER.build(Object.assign({}, pi, { org: org })).html);
+    if (pi) return fitInFrame(PAPER.build(Object.assign({}, pi, { org: org }, ex)).html);
     var ln = [{ name: '（見本）', qty: '1', unit: '式', price: '30000', rate: 10 }];
     var t = TAX.compute({ lines: ln, taxMode: 'exclusive', rounding: 'floor' });
-    return fitInFrame(PAPER.build({
+    return fitInFrame(PAPER.build(Object.assign({
       inv: { no: '（見本）', issue_ymd: todayYmd(), kind: 'invoice', lines: ln,
         totals: { grandTotal: t.grandTotal }, data: {} },
       tax: t, partner: { name: '（取引先）', honor: '御中' }, org: org,
       template: TPL.getOrDefault(settings().template),
-    }).html);
+      cols: COLS.normalizeSpec(editCols()),
+    }, ex)).html);
   }
   /** 紙の絵の中の 点 → 紙の mm（印の真ん中を その点に 合わせる） */
   function sealPutAt(clientX, clientY) {
@@ -2493,6 +2681,162 @@
       move(e.touches[0].clientX, e.touches[0].clientY, e);
     }, { passive: false });
     stage.addEventListener('touchend', function () { if (!sawPointer) up(); });
+  }
+
+  /* ═══ ★自社の Excel を そのまま使う★ ═══
+     （司さん 2026-08-31「ユーザーが自社のテンプレ持ってくる機能は？」）
+     ・seikyu-book.js は 2026-08-12 に作ってあったのに ★画面から1度も呼ばれていなかった★
+     ・流れ … ①読む（1バイトも書かない）②中身を そのまま表で見せる
+              ③どのセルに何を入れるかを 当てて 見せる（当てられない物は そう言う）
+              ④「この形で使う」で 会社の物として 覚える
+              ⑤ Excelに書き出す時 その Excel に 値を入れて出す（紙・PDFは 今まで通り）
+     ★当てた結果は 必ず 人に見せてから 使う★（lib の決まり④をそのまま守る） */
+  var bookPending = null;        // 読んだばかりで まだ「使う」を押していない物
+
+  function bookLib() { return global.SeikyuBook; }
+  function bookSaved() {
+    var d = S.org || {};
+    return (d.bookXlsx && d.bookPlan) ? { b64: d.bookXlsx, plan: d.bookPlan, name: d.bookName || '' } : null;
+  }
+  function b64ToBytes(b64) {
+    var bin = global.atob(String(b64 || ''));
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function bytesToB64(bytes) {
+    var s2 = '', b = bytes, step = 0x8000;
+    for (var i = 0; i < b.length; i += step) {
+      s2 += String.fromCharCode.apply(null, b.subarray(i, i + step));
+    }
+    return global.btoa(s2);
+  }
+  /** 読んだ中身を そのまま 表で見せる（当てたセルは 色を変える） */
+  function drawBookGrid(info, plan) {
+    var host = $('book-info'); if (!host) return;
+    var B = bookLib();
+    var g = B.previewGrid(info, null, { maxCols: 10, maxRows: 24 });
+    if (!g || !g.ok) { host.innerHTML = '<p class="hint">中身が 読めませんでした。</p>'; return; }
+    var hit = {};
+    Object.keys((plan && plan.slots) || {}).forEach(function (k) {
+      var sl = plan.slots[k]; if (sl && sl.addr) hit[sl.addr] = 1;
+    });
+    /* ★返ってくる形に こちらが 合わせる★＝head（左上は空）／rows[].cells[]
+       （2026-08-31 実測：g.cols という物は 無かった＝表の見出しが 出ていなかった） */
+    var head = '<tr>' + g.head.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + '</tr>';
+    var body = g.rows.map(function (r) {
+      return '<tr><th>' + esc(String(r.row)) + '</th>'
+        + r.cells.map(function (c) {
+          /* ★元のファイルに マスが無い所は そう見せる★＝そこには 書けない（lib の決まり） */
+          return '<td' + (hit[c.addr] ? ' class="hit"' : (c.exists ? '' : ' class="none"'))
+            + '>' + esc(c.text || '') + '</td>';
+        }).join('') + '</tr>';
+    }).join('');
+    host.innerHTML = '<p class="hint">読んだ物 … '
+      + esc(info.sheets.map(function (x) { return x.name; }).join(' / '))
+      + '　' + g.rows.length + '行 × ' + Math.max(0, g.head.length - 1) + '列（先頭だけ出しています）'
+      + '　数式 ' + (info.formulaCount === null ? '（読めませんでした）' : info.formulaCount + '本')
+      + '</p><div class="book-grid"><table><tbody>' + head + body + '</tbody></table></div>';
+  }
+  /** どこに 何を入れるかを 見せる（当てられない物は「当てられません」と言う） */
+  function drawBookSlots(plan) {
+    var host = $('book-slots'); if (!host) return;
+    var B = bookLib();
+    host.innerHTML = B.SLOTS.map(function (sl) {
+      var got = (plan.slots || {})[sl.key];
+      if (!got || !got.addr) {
+        return '<div class="book-slot"><span class="bs-l">' + esc(sl.label) + '</span>'
+          + '<span class="bs-v bs-no">当てられません（この Excel には 見つかりませんでした）</span></div>';
+      }
+      return '<div class="book-slot"><span class="bs-l">' + esc(sl.label) + '</span>'
+        + '<span class="bs-v">' + esc(got.addr) + '　今は「' + esc(String(got.now || '')) + '」</span></div>';
+    }).join('');
+  }
+  function pickBook(file) {
+    box('book-err', ''); box('book-ok', '');
+    var B = bookLib();
+    if (!B) { box('book-err', 'Excelを読む部品が 読めていません。画面を開き直してください。'); return; }
+    if (!file) return;
+    if (file.size > B.MAX_BYTES) {
+      box('book-err', 'このファイルは 大きすぎます（' + Math.round(file.size / 1024) + 'KB）。'
+        + Math.round(B.MAX_BYTES / 1024 / 1024) + 'MB までです。');
+      return;
+    }
+    var fr = new FileReader();
+    fr.onload = function () {
+      var bytes = new Uint8Array(fr.result);
+      Promise.resolve(B.inspect(bytes)).then(function (info) {
+        if (!info || !info.ok) {
+          box('book-err', 'この Excel は 読めませんでした（' + ((info && info.reason) || '理由が分かりません') + '）。');
+          show($('book-acts'), false);
+          return;
+        }
+        var plan = B.guessSlots(info);
+        bookPending = { bytes: bytes, info: info, plan: plan, name: file.name };
+        drawBookGrid(info, plan);
+        drawBookSlots(plan);
+        show($('book-acts'), true);
+        box('book-ok', '読みました。上の表で 当てた場所（色の付いたセル）を 確かめてください。');
+      }).catch(function (e) {
+        box('book-err', 'この Excel は 読めませんでした（' + (e && e.message) + '）。');
+      });
+    };
+    fr.onerror = function () { box('book-err', 'ファイルが 読めませんでした。'); };
+    fr.readAsArrayBuffer(file);
+  }
+  function useBook() {
+    if (!bookPending) { box('book-err', 'まだ Excel を読んでいません。'); return Promise.resolve(); }
+    var b64 = bytesToB64(bookPending.bytes);
+    return S.store.org.save({
+      bookXlsx: b64, bookPlan: bookPending.plan, bookName: bookPending.name,
+    }).then(function (r) {
+      if (!r.ok) { box('book-err', '覚えられませんでした（' + r.reason + '）'); return; }
+      S.org = Object.assign({}, S.org, { bookXlsx: b64, bookPlan: bookPending.plan, bookName: bookPending.name });
+      box('book-ok', 'この Excel を 会社の形として 覚えました。'
+        + '「Excelに書き出し」を押すと、この Excel に 値を入れて 出します。');
+    });
+  }
+  function clearBook() {
+    bookPending = null;
+    show($('book-acts'), false);
+    $('book-info').innerHTML = ''; $('book-slots').innerHTML = '';
+    return S.store.org.save({ bookXlsx: '', bookPlan: null, bookName: '' }).then(function (r) {
+      if (!r.ok) { box('book-err', '消せませんでした（' + r.reason + '）'); return; }
+      S.org = Object.assign({}, S.org, { bookXlsx: '', bookPlan: null, bookName: '' });
+      box('book-ok', 'Rakunallyの紙に 戻しました。');
+    });
+  }
+  /** 覚えた Excel に 値を入れて 出す（覚えていなければ null＝今まで通り） */
+  function bookExcel(name) {
+    var B = bookLib(), saved = bookSaved();
+    if (!B || !saved) return null;
+    var pi = paperInput(); if (!pi) return null;
+    var inv = pi.inv || {}, tax = pi.tax || {}, p = pi.partner || {};
+    var vals = {
+      partnerName: String(p.name || ''),
+      issueYmd: String(inv.issue_ymd || ''),
+      no: String(inv.no || ''),
+      subject: String((inv.data && inv.data.subject) || ''),
+      dueYmd: String(inv.due_ymd || ''),
+      subtotal: Number(tax.subtotal || 0),
+      taxTotal: Number(tax.taxTotal || 0),
+      grandTotal: Number(tax.grandTotal || 0),
+    };
+    var bytes = b64ToBytes(saved.b64);
+    /* ★読み直してから 書く★＝fill は「入れる先のマスが 元のファイルに在るか」を
+       ★srcInfo で 確かめてから★ 書く作り。渡さないと ★全部のマスが「無い」と見えて 断られる★
+       （2026-08-31 実測：私が null を渡していて 1マスも 書けなかった）。 */
+    return Promise.resolve(B.inspect(bytes)).then(function (info) {
+      if (!info || !info.ok) throw new Error((info && info.reason) || '読めませんでした');
+      var lineCols = B.guessLineCols(info, saved.plan);
+      var lineMap = lineCols ? B.lineCells(lineCols, inv.lines || [], tax.lines || []) : null;
+      return B.fill(bytes, saved.plan, vals, lineMap, info);
+    }).then(function (out) {
+      if (!out || !out.ok) throw new Error((out && out.reason) || '書けませんでした');
+      return OUT.pdf(out.bytes, name.replace(/\.[A-Za-z0-9]+$/, '') + '.xlsx').then(function () {
+        return out;
+      });
+    });
   }
 
   function pickSeal(file) {
@@ -2599,6 +2943,26 @@
     }).join('');
   }
 
+  /** ★設定の紙の下見★（司さん 2026-08-31「見せてあげて 変えて見せな分からん」）
+   *  ・今の設定（様式・行数・列・印）で ★本物の紙★を組んで そのまま小さくする
+   *  ・作りかけの1通が在れば その中身で、無ければ 見本の中身で 描く
+   *  ・★触るたびに 呼ぶ★（設定を開いた時／様式を選んだ時／列を触った時／印を触った時） */
+  function drawSetPaper() {
+    var fr = $('set-paper'); if (!fr) return;
+    /* ★打ちかけの行数も そのまま出す★＝保存しないと 見えない、を 作らない */
+    var rw = rowsSetting($('s-rows') ? $('s-rows').value : '');
+    var dw = rowsSetting($('s-dedrows') ? $('s-dedrows').value : '');
+    var ex = {};
+    if (rw !== null && rw !== undefined) ex.paperRows = rw;
+    if (dw !== null && dw !== undefined) ex.deductRows = dw;
+    ex.cols = COLS.normalizeSpec(editCols());
+    var html = sealPaperHtml(Object.assign({}, S.org || {}, { bank: settings().bank },
+      sealPending ? { sealDataUrl: sealPending } : {}), ex);
+    if (fr.getAttribute('data-h') === String(html.length)) return;   // 同じ物は 描き直さない
+    fr.setAttribute('data-h', String(html.length));
+    fr.srcdoc = html;
+  }
+
   function fillSettings() {
     var s = settings();
     drawOrgView();
@@ -2627,6 +2991,50 @@
         var rs = (TAX.rates ? TAX.rates() : []) || [];
         var top = rs.length ? Math.max.apply(null, rs.map(Number)) : null;
         $('s-taxnote').placeholder = top ? ('例：消費税は' + top + '%となっております。') : '例：消費税について ひとこと';
+        /* ★聞いてあげる。埋めさせない★（司さん 2026-08-16／08-28 ④の指摘）
+           空の欄に 打たせず ★札を 押すだけ★にする。打ちたい人は 下の欄に そのまま 打てる。
+           ★実物45枚（16社）は 45枚とも この一言が 在った★
+             「消費税は◯%と なっております。」35枚 ／「…と します。」11枚（ENEOS 25.3 は 両方）
+           ★率は lib から 作る★＝法が変わっても 札の字が 取り残されない。 */
+        var host = $('s-taxnote-ask');
+        if (host) {
+          var cand = [];
+          var now = String($('s-taxnote').value || '').trim();
+          if (now) cand.push({ v: now, t: '今の文：' + now });
+          if (top) {
+            ['消費税は' + top + '%となっております。', '消費税は' + top + '%とします。'].forEach(function (x) {
+              if (x !== now) cand.push({ v: x, t: x });
+            });
+          }
+          cand.push({ v: '', t: '出さない' });
+          /* ★選んである札が 絵で 分かる★（指示役 2026-09-02）＝押した後に「これが効いている」を見せる。
+             見た目は 様式の札（.tpl-pick.on）と 同じ 緑の縁を 借りる（新しい見た目を 作らない）。 */
+          var cur = String($('s-taxnote').value || '');
+          host.innerHTML = cand.map(function (c) {
+            var on = (c.v === cur);
+            return '<button class="pask-c btn-ghost' + (on ? ' chip-on' : '') + '" type="button"'
+              + ' aria-pressed="' + (on ? 'true' : 'false') + '"'
+              + ' data-taxnote="' + esc(c.v) + '">' + esc(c.t) + '</button>';
+          }).join('');
+          if (!host.dataset.bound) {
+            host.dataset.bound = '1';
+            host.addEventListener('click', function (ev) {
+              var b = ev.target && ev.target.closest && ev.target.closest('[data-taxnote]');
+              if (!b) return;
+              $('s-taxnote').value = b.getAttribute('data-taxnote') || '';
+              /* ★押した その場で 効かせる★（保存を押すまで 何も変わらない、にしない） */
+              $('s-taxnote').dispatchEvent(new Event('input', { bubbles: true }));
+              $('s-taxnote').dispatchEvent(new Event('change', { bubbles: true }));
+              /* ★選んだ札を その場で 光らせる★（★状態は 欄が 唯一の正★＝札は それを 見て 描き直すだけ） */
+              var v2 = String($('s-taxnote').value || '');
+              Array.prototype.forEach.call(host.querySelectorAll('[data-taxnote]'), function (x) {
+                var on2 = (x.getAttribute('data-taxnote') || '') === v2;
+                x.classList.toggle('chip-on', on2);
+                x.setAttribute('aria-pressed', on2 ? 'true' : 'false');
+              });
+            });
+          }
+        }
       })();
       $('s-dedhead').value = st.dedHead || '';
       $('s-dedsum').value = st.dedSum || '';
@@ -2678,6 +3086,7 @@
     }
     if (r === 0) txt += ' 明細の枠 0 ＝ 枠を作らず、打った行の数だけ刷ります。';
     setText('s-rows-note', txt);
+    drawSetPaper();                         /* ★行数を打ったら 紙も 変える★ */
   }
 
   function settingsHint() {
@@ -3212,6 +3621,55 @@
     if ($('b-pcols-clear')) $('b-pcols-clear').addEventListener('click', function () { partnerColsOwn(false); });
   }
 
+  /* ★この相手に出す口座★（2026-09-02・実物45枚＝相手ごとに 1〜6行で 違っていた）
+     ★聞いてあげる。埋めさせない★＝打たせない。会社の設定に在る口座を そのまま 出して 選ばせるだけ。
+     ・何も触らなければ ★全部★（＝今までと 同じ紙）
+     ・1つも 選ばないは ★全部に 戻す★（紙から 振込先が 消える方が 危ない）
+     ・★会社から 消えた口座を 選んだままの時は そう言う★（黙って 減らさない） */
+  function renderPartnerBanks(p) {
+    var host = $('s-pbanks'); if (!host) return;
+    var all = PAPER.bankLines(settings().bank || '');
+    var pick = PAPER.banksFor({ bank: settings().bank || '' }, SCOPE.partnerPaper(p));
+    var chosen = SCOPE.partnerPaper(p).banks;
+    if (!all.length) {
+      host.innerHTML = '';
+      setText('s-pbanks-why', '会社の設定に 口座が まだ ありません。'
+        + '「会社の設定」の お振込先に 入れると、ここで 相手ごとに 選べます。');
+      return;
+    }
+    host.innerHTML = all.map(function (line, i) {
+      var on = !Array.isArray(chosen) || !chosen.length
+        || pick.lines.indexOf(line) >= 0;
+      return '<label class="pbank"><input type="checkbox" data-bank="' + i + '"'
+        + (on ? ' checked' : '') + '> <span>' + esc(line) + '</span></label>';
+    }).join('');
+    Array.prototype.forEach.call(host.querySelectorAll('input[data-bank]'), function (cb) {
+      cb.addEventListener('change', function () {
+        var pp = partnerById($('s-partner') && $('s-partner').value);
+        if (!pp) return;
+        pp.data = pp.data || {};
+        pp.data.paper = partnerPaperFromForm(pp.id);
+        fillPartnerPaper(pp);
+        renderColEditor();
+      });
+    });
+    var n = pick.lines.length;
+    var why = (!Array.isArray(chosen) || !chosen.length)
+      ? '今は 会社の口座を 全部（' + all.length + '）出します。'
+      : ('この相手には ' + n + '／' + all.length + ' を 出します。');
+    if (pick.missing.length) {
+      why += '★会社の設定から 消えた口座が ' + pick.missing.length + ' あります（出しません）：'
+        + pick.missing.join(' ／ ') + '★';
+    }
+    why += ' 1つも 選ばないと 全部 出します（紙から 振込先が 消えないように）。';
+    if (n > PAPER.BANK_ROWS_FREE) {
+      why += ' ★口座が ' + n + ' なので 明細に使える行が '
+        + (PAPER.maxRowsOf(false, 0, 0, PAPER.BANK_ROWS_FREE) - PAPER.maxRowsOf(false, 0, 0, n))
+        + ' 減ります（紙から 字が 切れないように）。★';
+    }
+    setText('s-pbanks-why', why);
+  }
+
   function fillPartnerPaper(p) {
     var sel = $('s-ptpl'); if (!sel) return;
     bindPartnerPaper();
@@ -3232,6 +3690,7 @@
     setText('s-pcols-hint', own
       ? ('この相手だけの列です（' + pp.cols.items.length + '本）。下の「明細の列」で 直せます。')
       : '今は 会社の既定の列です。');
+    renderPartnerBanks(p);
   }
   /** この相手だけの列を 作る（★会社の今の列を 写してから 直す★＝白紙から作らせない） */
   function partnerColsOwn(on) {
@@ -3362,6 +3821,18 @@
     else if (sj === 'off') out.subjectOn = false;
     /* 列は ボタンで作る物（フォームの欄ではない）＝今の物を そのまま持ち越す */
     if (now.cols && now.cols.items && now.cols.items.length) out.cols = now.cols;
+    /* ★口座★ … 全部にチェックが入っている時は ★入れない★（＝会社の既定のまま＝全部）。
+       1つも 選んでいない時も 入れない（全部に 戻す）。＝空欄を 相手に 持たせない。 */
+    var host = $('s-pbanks');
+    if (host) {
+      var all = PAPER.bankLines(settings().bank || '');
+      var on = [];
+      Array.prototype.forEach.call(host.querySelectorAll('input[data-bank]'), function (cb) {
+        var i = Number(cb.getAttribute('data-bank'));
+        if (cb.checked && all[i] !== undefined) on.push(all[i]);
+      });
+      if (on.length && on.length < all.length) out.banks = on;
+    }
     return out;
   }
 
@@ -3406,6 +3877,7 @@
         var t = b.getAttribute('data-scr');
         if (t === 'scr-edit' && !S.cur) { newInvoice(); return; }
         if (t === 'scr-set') fillSettings();
+        if (t === 'scr-bill') renderBill();          /* ★請求/集計＝開いたら すぐ描く★ */
         /* ★設定を変えて戻ってきた時、古い案内を残さない★
            （紙の行数を20行にしたのに「紙は2枚になります」と言ったまま＝
              人は「直っていない」と見る。2026-08-15 実UIで実際に出た） */
@@ -3600,6 +4072,22 @@
       if ($('seal-y')) $('seal-y').value = '';
       drawSealStage();
     };
+    /* ★請求 / 集計★ 月・相手を変えたら すぐ 紙も 集計も 変える */
+    if ($('bill-month')) $('bill-month').onchange = function () {
+      billPick.ym = $('bill-month').value; renderBill();
+    };
+    if ($('bill-partner')) $('bill-partner').onchange = function () {
+      billPick.pid = $('bill-partner').value; renderBill();
+    };
+    if ($('b-bill-pdf')) $('b-bill-pdf').onclick = function () { billDo('pdf'); };
+    if ($('b-bill-print')) $('b-bill-print').onclick = function () { billDo('print'); };
+    if ($('b-bill-xlsx')) $('b-bill-xlsx').onclick = function () { billDo('xlsx'); };
+    /* ★自社のExcel★ 読む・使う・やめる */
+    if ($('book-file')) $('book-file').onchange = function (e) {
+      pickBook(e.target.files && e.target.files[0]);
+    };
+    if ($('b-book-use')) $('b-book-use').onclick = function () { return useBook(); };
+    if ($('b-book-clear')) $('b-book-clear').onclick = function () { return clearBook(); };
     $('b-seal-save').onclick = function () { return saveSeal(); };
     $('b-seal-clear').onclick = function () { return clearSeal(); };
     $('seal-file').onchange = function (e) { pickSeal(e.target.files && e.target.files[0]); };
@@ -3676,12 +4164,19 @@
     _go: goScreen,
     _new: newInvoice,
     _fillSettings: fillSettings,
+    /* テスト用: ★相手ごとの紙の設定を 画面から 作る★（口座の札を 押した結果が 入るか を 見る為） */
+    _partnerPaperFromForm: function (id) { return partnerPaperFromForm(id); },
     _loadMasters: function () { return loadMasters(true); },   // テストから1回だけ読ませる
     _recalcForTest: function () { return recalc(); },          // テスト用: 数え直しだけ走らせる
     _fillEdit: fillEdit,          // テスト用: 入力の画面を描き直す（★見られない物は 見張れない★）
     _invAskAnswer: function (k, v) { return invAskAnswer(k, v); },   // テスト用: 聞く形に答える
     _saveDraftForTest: function () { return saveDraft(); },          // テスト用: 下書き保存を そのまま走らせる
     _renderListForTest: function () { return renderList(); },        // テスト用: 一覧を 描き直す
+    _renderBillForTest: function (ym, pid) {                         // テスト用: 請求/集計を 描く
+      if (ym !== undefined) billPick.ym = ym;
+      if (pid !== undefined) billPick.pid = pid;
+      return renderBill();
+    },
     _reportForTest: function (m) { return reportOf(m); },            // テスト用: 集計の数だけ取る
     /* テスト用: ★本物の紙★を そのまま返す（見張りが 紙の中身を数える為。
        ★画面と同じ道を通す★＝紙だけ別の作り方をしない） */
@@ -3698,6 +4193,18 @@
        倉庫の無い試験からは 押せない＝「ボタンが在る」で 終わらせない為の 穴） */
     _bindForTest: function () { return bind(); },
     _paperBtnsForTest: function () { return PAPER_BTNS.slice(); },   // テスト用: 門を掛ける相手の一覧
+    _pickBookForTest: function (bytes, nm) {                 // テスト用: 読む所だけ 走らせる
+      var B = bookLib(); if (!B) return Promise.resolve(null);
+      return Promise.resolve(B.inspect(bytes)).then(function (info) {
+        if (!info || !info.ok) return { ok: false, reason: info && info.reason };
+        var plan = B.guessSlots(info);
+        bookPending = { bytes: bytes, info: info, plan: plan, name: nm || 'x.xlsx' };
+        drawBookGrid(info, plan); drawBookSlots(plan); show($('book-acts'), true);
+        return { ok: true, plan: plan };
+      });
+    },
+    _useBookForTest: function () { return useBook(); },
+    _bookSavedForTest: function () { return bookSaved(); },
     _sealStageForTest: function () { bindSealStage(); return drawSealStage(); },
     _sealPutAtForTest: function (x, y) { return sealPutAt(x, y); },
     _sealXYForTest: function () { return sealXY; },

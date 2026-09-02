@@ -14,87 +14,6 @@ name: CI
 #   ・グリッドの日付／列幅（tests/grid-*.test.mjs）… 見る物 book.html が無い（Exally のブック）
 #   ・LibreOffice 参照ジョブ … tools/golden-libre.sh と tests/xlsx-harness/ が無い（同上）
 #   ★戻す条件★: Rakunally に表(ブック)を置くと決めた日。部品と一緒に この2つも戻す。
-# ★★ここは 本番 rakunally（請求書だけ）★★ … 元は rakually-test の CI をそのまま運んだ物。
-#   scripts/ship-seikyu.mjs が ★運び先に無いファイルを指すステップだけ★ 外して作る。
-#   ★外した理由は1つだけ＝給与の画面(kyuyo/)を運んでいないから★（機能を削った訳ではない）。
-#   ★戻す条件★: 本番にも給与を出す日（＝10月の改名・URL切替の塊）。その時 一緒に戻す。
-#   ★手で消さない★＝ここを直す時は rakually-test 側を直して 運び直す。
-#   ★外したステップ 75本★
-#     ・Stamp tool tests (ハッシュが決定論か=CRLF/LF・OS差でブレないか)  ★理由★ 入口のインラインscriptと 撤去した看板の一覧を見る作り＝この repo には見る物が無い
-#     ・★配信ガード (href="/…" 等の絶対パス・本番倉庫への誤接続を止める)  ★理由★ ★配信HTMLの本数で空振りを見る作り★＝この repo は2枚しか無い（自己確認も給与の画面を壊す作り）
-#     ・★配信ガード (わざと壊して赤になるかの自己確認・6通り)  ★理由★ ★配信HTMLの本数で空振りを見る作り★＝この repo は2枚しか無い（自己確認も給与の画面を壊す作り）
-#     ・★重複ガード (同じ物が2箇所に無いか・法定データは例外なし)  ★理由★ 法定データの一覧が この repo では2本だけ＝「一覧が実物と合っているか」の空振り検査が成り立たない
-#     ・★入口のログイン（登録の直後に袋小路にしない）  ( kyuyo/tests/rakunally-login.test.mjs )
-#     ・★入口のログイン（パスワードを忘れた＝逃げ道）  ( kyuyo/tests/rakunally-login-forgot.test.mjs )
-#     ・★同じ見張りを わざと壊して 赤になるか（本物に1件 戻す所まで）  ★理由★ 自己確認が ★給与の kyuyo/js/app.js に1件 戻して★ 赤を確かめる作り（本体の screen-words は毎回 走る）
-#     ・★参照ガード (require/importの先が実在するか・api/が実際に読み込めるか)  ★理由★ 相対参照の本数で空振りを見る作り＝画面が2枚のこの repo では しきい値が意味を持たない
-#     ・★法定値の直書きガード (率・額が説明文に固定されていないか)  ( tests/no-hardcoded-statutory.test.mjs )
-#     ・★ファイルの渡し方 (種類・全端末で落とす=共有シートを使わない・名前に日時)  ( kyuyo/tests/file-out.test.mjs )
-#     ・★スマホ幅の見た目 (ボタンが折り返さない / 対象月の選択は1つで重ならない)  ( kyuyo/tests/button-wrap.test.mjs , kyuyo/tests/ym-picker.test.mjs )
-#     ・★⑦振込データ 実際に動かして 全銀の欄を1文字ずつ読む (境界5つ・改行3通り)  ( kyuyo/tests/zengin-real.mjs )
-#     ・★⑦振込データ (委託者コード空/受取人名が漢字だけ で押せるかの自己確認)  ( kyuyo/tests/zengin-real.mjs )
-#     ・★振込指定日が対象月に追従するか (12か月/年またぎ/末日/うるう年/土日祝/年末年始/全銀の4文字)  ( kyuyo/tests/furikomi-date.test.mjs )
-#     ・★振込指定日 (昔の姿へ戻す/門番を外す/休みを見ない に戻したら赤になるかの自己確認)  ( kyuyo/tests/furikomi-date.test.mjs )
-#     ・★振込タブ (印刷から切り離した / 機能を消していない / 0件で押せない＋理由 / 空ファイルを作らない)  ( kyuyo/tests/furikomi-tab.test.mjs )
-#     ・★契約v0 (レジストリ / 契約の線=呼ばれているか・面を呼び返していないか)  ( tests/op-registry.test.mjs , tests/op-boundary.test.mjs )
-#     ・★最低賃金 47県が公式の実額と一致 (前科のある行・1円単位)  ( kyuyo/tests/saitei-official.test.mjs )
-#     ・★最低賃金を県ごとの発効日で判定 (誤警告ゼロ＋本物の割れを見逃さない)  ( kyuyo/tests/saitei-hatsuko.test.mjs )
-#     ・★法定データの出典・確認日・指紋 (率を変えたら確認日が自己失効する)  ( kyuyo/tests/statutory-freshness.test.mjs )
-#     ・★app.jsの道とオペの道が同じ物を作るか (新旧AOA完全一致)  ( kyuyo/tests/ops-app-parity.test.mjs )
-#     ・★設定ファイルに知らない項目/説明文が混ざっていないか (混ぜるとデプロイがビルド前に止まる)  ★理由★ 設定ファイルの本数で空振りを見る作り＝この repo には2本しか無い
-#     ・★空振りしているテストが無いか (SKIPを緑と呼んでいないか・逃げ道/除外の一覧)  ★理由★ kyuyo/tests を見に行く作り＝この repo には無い
-#     ・★HTMLの中のJSが構文として通るか (git ls-files で全HTMLを自動で拾う)  ★理由★ インラインscriptを持つHTMLが この repo には無い＝0本で空振り判定になる
-#     ・★HTMLの中のJS (わざと壊して赤になるかの自己確認・実物も1本 壊す)  ★理由★ 同上（自己確認も 実物のインラインscriptを1本 壊す作り）
-#     ・★これは Rakunally の器か (客が読む字・タブの題・ホーム画面の名前・★アイコン★を全5画面＋manifest3本で数える)  ( tests/own-name.test.mjs )
-#     ・★これは Rakunally の器か (わざと他アプリの名前を戻して赤になるか＋アイコンの見張りが空振りしていないか・8通り)  ( tests/own-name.test.mjs )
-#     ・★アイコンの ?v= が中身のSHAと合っているか (5画面＋manifest3本・24本)  ★理由★ 5画面＋manifest3本を名前で固定して数える作り＝この repo は2画面＋manifest1本
-#     ・CI coverage guard (CIから黙って外れているテストが無いか=除外は理由と戻す条件つきのみ)  ★理由★ CIが回すテストの本数で空振りを見る作り＝この repo では本数が違う
-#     ・★支給サイクルの任意 (月ベース=日を入れる／週ベース=N週／紙の字／聞く形／金額は動かない)  ( kyuyo/tests/paycycle-custom.test.mjs )
-#     ・★同 わざと壊して赤になるか（任意を消す／出しっぱなし／数が空／空どうしの比較）  ( kyuyo/tests/paycycle-custom.test.mjs )
-#     ・★会社の情報は第3の場所か (請求書→給与のリンク0本・帰り道が出る・2か所持ちが無い)  ( seikyu/tests/kaisha-link.test.mjs )
-#     ・★同 わざと戻して赤になるか（給与へのリンク／帰り道／給与の打てる欄）  ( seikyu/tests/kaisha-link.test.mjs )
-#     ・Payroll unit tests (依存なし・実数リテラル+回帰)  ( kyuyo/tests/run.js )
-#     ・★黙って0を返す catch が お金の所に無いか  ★理由★ お金の所の一覧に 給与のファイルが入っている＝この repo では一覧が成り立たない（元で毎回 走る）
-#     ・★黙って0を返す catch (わざと作ったら見つけられるかの自己確認)  ★理由★ お金の所の一覧に 給与のファイルが入っている＝この repo では一覧が成り立たない（元で毎回 走る）
-#     ・★わざと失敗させて押す (公開が落ちた時に 言うか／袋小路にならないか)  ( kyuyo/tests/publish-fail-ui.mjs )
-#     ・★わざと失敗させて押す (0を返す形へ戻したら赤になるかの自己確認)  ( kyuyo/tests/publish-fail-ui.mjs )
-#     ・★台帳ボタンは行数を見てから出しているか (0件/読めない/未計測で出たら赤)  ( kyuyo/tests/ledger-banner.mjs )
-#     ・★台帳ボタン (行数を見ない昔の姿へ戻したら赤になるかの自己確認)  ( kyuyo/tests/ledger-banner.mjs )
-#     ・★勤怠CSVの60時間超が 本当に50%で払われるか (本物のエンジンで金額を見る)  ( kyuyo/tests/kintai-csv-money.mjs )
-#     ・★勤怠CSVの60時間超 (置き場を消したら赤になるかの自己確認)  ( kyuyo/tests/kintai-csv-money.mjs )
-#     ・★勤怠CSVの受け口が エンジンの割増7欄を全部 持っているか  ( kyuyo/tests/csv-covers-engine.test.mjs )
-#     ・★受け口の欄を1つ消したら赤になるかの自己確認  ( kyuyo/tests/csv-covers-engine.test.mjs )
-#     ・★給与の状態を数え直す (docs/STATE_kyuyo.md の数と突き合わせ・ズレたら赤)  ★理由★ 給与の画面を数える道具＝この repo には給与の画面が無い
-#     ・★給与の状態 (数を1つずらしたら赤になるかの自己確認)  ★理由★ 給与の画面を数える道具＝この repo には給与の画面が無い
-#     ・★運ぶ道具の自己確認 (入口から給与のタイルを外す/法定2本も運ぶ/前後の数が同じ)  ★理由★ 運び先には もう給与のタイルが無い＝「外せるか」を試せない（元の側で毎回 走る）
-#     ・★描かれた字の色を数える (13画面を本物のChromeで描かせて 控えと突き合わせる)  ★理由★ 13画面を名前で固定して描かせる作り＝この repo は2画面（色は元の側で毎回 数える）
-#     ・★描かれた字の色 (1か所ずつ色を変えて 捕まえられるかの自己確認・13通り)  ★理由★ 13画面を名前で固定して描かせる作り＝この repo は2画面（色は元の側で毎回 数える）
-#     ・★人が埋める欄を数える (給与の会社情報)  ( scripts/count-fields.mjs , kyuyo/index.html )
-#     ・★会社マスタ7問 (7つ在る/県→最賃と業種→率が libの実数と一致/チップに残っていない/県が実際に効く)  ( kyuyo/tests/company-ask.test.mjs )
-#     ・★会社マスタ7問 (わざと戻して赤になるかの自己確認・4通り)  ( kyuyo/tests/company-ask.test.mjs )
-#     ・★従業員マスタ7問 (7つ在る/年齢で決まる物/給料は押すまで入れない/マイカーの非課税はlib/県は会社から継ぐ)  ( kyuyo/tests/emp-ask.test.mjs )
-#     ・★従業員マスタ7問 (わざと戻して赤になるかの自己確認・4通り)  ( kyuyo/tests/emp-ask.test.mjs )
-#     ・Payroll integration (jsdomで本物のapp.jsを読み配線/UI/状態/描画)  ( kyuyo/tests/integration.mjs )
-#     ・Payroll full-feature real-data (給与全パターン)  ( kyuyo/tests/payroll-patterns.mjs )
-#     ・Payroll UI smoke (全ボタンをクリックしてJS例外0)  ( kyuyo/tests/ui-smoke.mjs )
-#     ・Payroll cloud sync (保存層・Supabaseモック)  ( kyuyo/tests/cloud-sync.mjs )
-#     ・Payroll pagination (1000件超が黙って欠落しない)  ( kyuyo/tests/pagination.test.mjs )
-#     ・Payroll meisai store (Web明細 公開一覧/削除時リンク失効)  ( kyuyo/tests/meisai-store.mjs )
-#     ・Payroll QR (復号)  ( kyuyo/tests/qr.test.mjs )
-#     ・Payroll 年末調整 (Web申告/計算)  ( kyuyo/tests/nencho-web-declaration.test.js , kyuyo/tests/nencho-compute.test.mjs )
-#     ・Golden freeze guard (移設前の真値と入力fixtureが作り直されていないか)  ( kyuyo/tests/golden-immutable.test.mjs )
-#     ・Headless guard (lib/ がDOM・通信・非決定性に依存しない)  ( kyuyo/scripts/verify-headless.mjs )
-#     ・★源泉区分(204条) 選べるのに算式が無い区分を残さない＋実数1円一致  ( kyuyo/tests/gensen-kubun.test.mjs )
-#     ・★契約が実データの書き方を受け取れるか (画面の選択肢を機械で突き合わせ)  ( kyuyo/tests/ops-real-values.test.mjs )
-#     ・Ops golden parity (★1円一致★ 移設前ゴールデン vs ops/payroll.monthly)  ( kyuyo/tests/ops-golden-parity.test.mjs )
-#     ・Ops statutory (官公値の実数リテラル・Excel同一ソース・テストAPI非露出)  ( kyuyo/tests/ops-payroll-monthly.test.mjs )
-#     ・Law switchpoints (健保R7→R8/支援金2026-04/雇用保険年度/最賃年度の境界前後)  ( kyuyo/tests/law-switchpoints.test.mjs )
-#     ・★賃金要件撤廃の見張りの判定 (--self-test・ネットに触らない)  ( kyuyo/scripts/check-wage88k-removal.mjs )
-#     ・★最賃の年度の見張りの判定 (--self-test・ネットに触らない)  ( kyuyo/scripts/check-saitei-nendo.mjs )
-#     ・Periods golden (期間分割K2が移設前と一致)  ( kyuyo/tests/periods-golden.test.mjs )
-#     ・Fixture reproducibility (入力fixtureが生成スクリプトと一致するか)  ( kyuyo/scripts/make-input-fixture.mjs , kyuyo/scripts/make-periods-fixture.mjs )
-#     ・★中央statutoryの写しが最新か (出典/確認日/指紋・最賃47県。手書きを2箇所に残さない)  ( kyuyo/scripts/pull-statutory.mjs )
-#     ・Statutory drift guard (lib == 中央statutory)  ( kyuyo/scripts/verify-statutory.mjs )
 on:
   push:
     branches: [main]
@@ -119,24 +38,95 @@ jobs:
       # ── Rakunally 共通（入口・共有データ・台帳・集計。元 Exally 由来を据置） ──
       - name: Cache-buster stamp guard (貼り忘れ検知・コードより先に見る)
         run: node scripts/stamp-build.mjs --check
+      - name: Stamp tool tests (ハッシュが決定論か=CRLF/LF・OS差でブレないか)
+        run: node tests/stamp.test.mjs
+      # ↓ tests/run.js にも入っているが、赤くなった時にどれで落ちたか一目で分かるよう先に単独で出す
       - name: ★テスト環境の帯 (本番には絶対 出さない・全画面に入っている・頭を隠さない)
         run: node tests/env-badge.test.mjs
       - name: ★テスト環境の帯 (ホスト名で決める作りに戻すと赤になるかの自己確認)
         run: node tests/env-badge.test.mjs --self-test
+      - name: ★配信ガード (href="/…" 等の絶対パス・本番倉庫への誤接続を止める)
+        run: node tests/pages-hosting.test.mjs
+      - name: ★配信ガード (わざと壊して赤になるかの自己確認・6通り)
+        run: node tests/pages-hosting.test.mjs --self-test
       - name: Rakunally 共通 tests (入口UI/共有データ/集計/台帳→実績値/横断集計/配信ガード/HTMLの中のJS/禁止色)
         run: node tests/run.js
+      - name: ★重複ガード (同じ物が2箇所に無いか・法定データは例外なし)
+        run: node tests/no-duplicate-libs.test.mjs
+      - name: ★入口のログイン（登録の直後に袋小路にしない）
+        run: node kyuyo/tests/rakunally-login.test.mjs
+      - name: ★入口のログイン（パスワードを忘れた＝逃げ道）
+        run: node kyuyo/tests/rakunally-login-forgot.test.mjs
       - name: ★画面に出る字に 中の言葉が0件か（覚書の中は数えない）
         run: node scripts/screen-words.mjs
+      - name: ★同じ見張りを わざと壊して 赤になるか（本物に1件 戻す所まで）
+        run: node scripts/screen-words.mjs --self-test
       - name: ★在る試験が 全部 走っているか（登録しないと1本も走らない）＋returnの直後の改行
         run: node scripts/tests-registered.mjs
       - name: ★同じ見張りを わざと壊して 赤になるか
         run: node scripts/tests-registered.mjs --self-test
+      - name: ★参照ガード (require/importの先が実在するか・api/が実際に読み込めるか)
+        run: node tests/refs-resolve.test.mjs && node tests/refs-resolve.test.mjs --self-test
+      - name: ★法定値の直書きガード (率・額が説明文に固定されていないか)
+        run: node tests/no-hardcoded-statutory.test.mjs && node tests/no-hardcoded-statutory.test.mjs --self-test
+      - name: ★ファイルの渡し方 (種類・全端末で落とす=共有シートを使わない・名前に日時)
+        run: node kyuyo/tests/file-out.test.mjs
+      - name: ★スマホ幅の見た目 (ボタンが折り返さない / 対象月の選択は1つで重ならない)
+        run: node kyuyo/tests/button-wrap.test.mjs && node kyuyo/tests/button-wrap.test.mjs --self-test && node kyuyo/tests/ym-picker.test.mjs && node kyuyo/tests/ym-picker.test.mjs --self-test
+      # ★振込指定日が対象月に追従しない＝先月の日付が銀行へ行く★（指示役 2026-08-27 D＝今週の優先1位）
+      #   銀行の休みは ★法律★（銀行法15条1項・施行令5条1項）／★寄せる向きは法律に無い＝会社の設定★。
+      # ★⑦振込データを 実際に動かす★（指示役 2026-08-28「給与の一番 危ない所」）
+      #   ★画面のボタンを実際に押して★ 出たバイト列を ★120バイトずつ 欄の位置で 1文字ずつ読む★。
+      #   ★中の値どうしで閉じない★（作った値を自分で足し直すのは 検算ではない）。
+      - name: ★⑦振込データ 実際に動かして 全銀の欄を1文字ずつ読む (境界5つ・改行3通り)
+        run: node kyuyo/tests/zengin-real.mjs
+      - name: ★⑦振込データ (委託者コード空/受取人名が漢字だけ で押せるかの自己確認)
+        run: node kyuyo/tests/zengin-real.mjs --self-test
+      - name: ★振込指定日が対象月に追従するか (12か月/年またぎ/末日/うるう年/土日祝/年末年始/全銀の4文字)
+        run: node kyuyo/tests/furikomi-date.test.mjs
+      - name: ★振込指定日 (昔の姿へ戻す/門番を外す/休みを見ない に戻したら赤になるかの自己確認)
+        run: node kyuyo/tests/furikomi-date.test.mjs --self-test
+      - name: ★振込タブ (印刷から切り離した / 機能を消していない / 0件で押せない＋理由 / 空ファイルを作らない)
+        run: node kyuyo/tests/furikomi-tab.test.mjs && node kyuyo/tests/furikomi-tab.test.mjs --self-test
       - name: ★iPhoneで動かない書き方ガード (type=month / octet-stream / writeFile / Blob散在)
         run: node tests/ios-unsupported.test.mjs && node tests/ios-unsupported.test.mjs --self-test
+      - name: ★契約v0 (レジストリ / 契約の線=呼ばれているか・面を呼び返していないか)
+        run: node tests/op-registry.test.mjs && node tests/op-boundary.test.mjs && node tests/op-boundary.test.mjs --self-test
+      - name: ★最低賃金 47県が公式の実額と一致 (前科のある行・1円単位)
+        run: node kyuyo/tests/saitei-official.test.mjs
+      - name: ★最低賃金を県ごとの発効日で判定 (誤警告ゼロ＋本物の割れを見逃さない)
+        run: node kyuyo/tests/saitei-hatsuko.test.mjs
+      - name: ★法定データの出典・確認日・指紋 (率を変えたら確認日が自己失効する)
+        run: node kyuyo/tests/statutory-freshness.test.mjs && node kyuyo/tests/statutory-freshness.test.mjs --self-test
+      - name: ★app.jsの道とオペの道が同じ物を作るか (新旧AOA完全一致)
+        run: node kyuyo/tests/ops-app-parity.test.mjs
+      - name: ★設定ファイルに知らない項目/説明文が混ざっていないか (混ぜるとデプロイがビルド前に止まる)
+        run: node tests/config-schema.test.mjs && node tests/config-schema.test.mjs --self-test
+      - name: ★空振りしているテストが無いか (SKIPを緑と呼んでいないか・逃げ道/除外の一覧)
+        run: node tests/hollow-guard.test.mjs --self-test && node tests/hollow-guard.test.mjs
       - name: ★入口の見張りの「判定」が空振りしていないか (外へ出ない部分だけ・実際の死活は hosts.yml 週1)
         run: node scripts/check-hosts.mjs --self-test
       # ★HTMLの中の <script> は lint も試験も見ない＝構文が壊れてもアプリが丸ごと死ぬまで気づかない
       #   （2026-08-12 ダイコメが実際に踏んだ）。的は5枚のHTMLのインライン4本（2026-08-17 実測）。
+      - name: ★HTMLの中のJSが構文として通るか (git ls-files で全HTMLを自動で拾う)
+        run: node tests/html-script-syntax.test.mjs
+      - name: ★HTMLの中のJS (わざと壊して赤になるかの自己確認・実物も1本 壊す)
+        run: node tests/html-script-syntax.test.mjs --self-test
+      # ★この器は Rakunally の物★（司さん 2026-08-17）。請求書だけの見張りを全画面へ広げた物。
+      - name: ★これは Rakunally の器か (客が読む字・タブの題・ホーム画面の名前・★アイコン★を全5画面＋manifest3本で数える)
+        run: node tests/own-name.test.mjs
+      - name: ★これは Rakunally の器か (わざと他アプリの名前を戻して赤になるか＋アイコンの見張りが空振りしていないか・8通り)
+        run: node tests/own-name.test.mjs --self-test
+      # ★アイコンの ?v= は stamp-build（js/lib/css だけ）の対象外＝別の道具で貼る。
+      #   貼り忘れると「差し替えたのに端末は古い絵のまま」になる（ホーム画面は特に長く残る）。
+      #   ※ 絵を作り直す scripts/make-icons.mjs は ImageMagick が要るのでCIでは走らせない
+      #     （その代わり own-name.test.mjs が 寸法・不透明・丸く切っても欠けないか を毎回 実測する）。
+      - name: ★アイコンの ?v= が中身のSHAと合っているか (5画面＋manifest3本・24本)
+        run: node scripts/icon-stamp.mjs --check
+      # ★ロゴの文字を刷る道具★（2026-08-28 司さん「DM Mono で作り直せ」）。
+      #   本体（node scripts/make-logo.mjs）は ★Google Fonts に出る★のでCIでは走らせない。
+      #   ★自己確認だけは 毎回 回す★＝色の見分け・合わせ先の数字・「読めなければ止まる」道が
+      #   生きているかを見る（＝★在るのに0回★を作らない）。
       - name: ★ロゴを刷る道具の自己確認 (色の見分け・合わせ先677/508/68・別の字体で刷らない)
         run: node scripts/make-logo.mjs --self-test
       # ★改名の道具★（Rakually→Rakunally）。替えてはいけない物（URL・repo名・司さんの引用）を
@@ -151,6 +141,13 @@ jobs:
         run: node tests/kaisha-ask.test.mjs --self-test
       - name: ★入口 会社の聞く形を実際に押す (欄にも入る・1問ごと保存・飛ばす・自分で消える)
         run: node tests/kaisha-ask-ui.mjs
+      - name: CI coverage guard (CIから黙って外れているテストが無いか=除外は理由と戻す条件つきのみ)
+        run: node tests/ci-coverage.test.mjs
+
+      # ── 請求書(seikyu/) ──────────────────────────────────────────────
+      # ★テストを足すコミットと、それをCIに並べる登録は離さない（指示役 2026-08-10）。
+      #   seikyu/tests に何本書いてもここに並べなければ1本も走らない＝
+      #   「テストが緑」が請求書のテストを1本も見ていない状態になる。
       - name: ★請求書 消費税 (税率ごとに1回だけ丸める・国税庁の定め)
         run: node seikyu/tests/seikyu-tax.test.mjs
       - name: ★請求書 消費税 (わざと「明細ごとに丸める」等に壊して赤になるかの自己確認)
@@ -218,6 +215,28 @@ jobs:
       #   ★飛んだ先から 元の画面へ戻れる★所まで 実際に開いて見る。
       # ★支給サイクルの「任意（N週ごと）」★（司さん 2026-08-28「隔週・4週ごとが入れられない」）
       #   ★締め方と同じ作り★で足した。★実際に選んで・打って・紙の字まで見る★。
+      - name: ★支給サイクルの任意 (月ベース=日を入れる／週ベース=N週／紙の字／聞く形／金額は動かない)
+        run: node kyuyo/tests/paycycle-custom.test.mjs
+      - name: ★同 わざと壊して赤になるか（任意を消す／出しっぱなし／数が空／空どうしの比較）
+        run: node kyuyo/tests/paycycle-custom.test.mjs --self-test
+      # ★この1通のことを「聞いてあげる」★（件名・支払期限）＝08-16の決定を請求書にも入れる
+      #   ★AIは使わない（決定論）★／★当てた物は根拠を見せる★／★当てられない時は当てない★
+      # ★自社のExcelを そのまま使う★（司さん 2026-08-31「ユーザーが自社のテンプレ持ってくる機能は？」）
+      #   seikyu-book.js は 2026-08-12 に作ってあったのに 19日間 画面から呼ばれていなかった。
+      - name: ★自社のExcel 読む/表に出す/当てる/当てられない物は言う/書く/画面から呼ばれている
+        run: node seikyu/tests/book-ui.mjs
+      - name: ★同 画面から外したら赤になるか
+        run: node seikyu/tests/book-ui.mjs --self-test
+      # ★パスワードの再設定★（司さん 2026-08-31 実機・本番で 止まった）
+      #   メールの合図は その場でセッションを作る＝「入っている」と見て 再設定の欄を消していた。
+      - name: ★パスワードの再設定が最後までできるか (再設定中は中へ入れない・決めたら入る)
+        run: node tests/pw-reset.test.mjs
+      - name: ★同 蓋の1行を外したら赤になるか
+        run: node tests/pw-reset.test.mjs --self-test
+      # ★借りた道具★（司さん 2026-08-30「ハンコの情報あるんやけんやれや」）
+      #   白抜きの hanko.js は 代行請求/Exally に前から在った物を 1文字も変えずに借りた。
+      #   ★コピペして置きっぱなしにしない★＝正本と中身が同じかを 機械で照らす。
+      #   ★CIには 別repoが無い＝そこは「未測定」と出る（0件＝合っていた ではない）★
       - name: ★借りた hanko.js が 元と1文字も違わないか（改行はそろえて数える）
         run: node tests/hanko-same.test.mjs
       # ★外から読む道具の版★（経営者 2026-09-02／司さん「これから先も絶対起きないように」）
@@ -228,6 +247,24 @@ jobs:
         run: node tests/cdn-pin.test.mjs
       - name: ★同 悪い書き方を 本当に 赤にできるか（preconnect・CSPは拾わない）
         run: node tests/cdn-pin.test.mjs --self-test
+      # ★playwright の 借り方は 1か所★（指示役の裁定 2026-09-02）
+      #   借り先リストを 7本が 別々に 持っていた（4か所／3か所／2か所）＝
+      #   ★同じ機械で 1本だけ 測れて 他は 未測定（緑）★ が 起きる。
+      #   さらに ★launch() を try で 包んでいない★物が 4本＝★生の例外で 落ちる★。
+      #   ⇒ 借り方も 未測定の言い方も 終わり値も scripts/_borrow-playwright.mjs が 1か所で 持つ。
+      - name: ★playwrightの借り方は1か所（自前の借り先0・直のlaunch0・借り先4か所・週1の目印）
+        run: node tests/pw-borrow.test.mjs
+      - name: ★同 わざと壊すと 赤になるか（注記の中の物は 拾わない・台帳はtryまで見る）
+        run: node tests/pw-borrow.test.mjs --self-test
+      # ★この相手に出す口座★（2026-09-02・実物45枚を 機械で読んだ＝相手ごとに 1〜6行で 違った）
+      #   会社の設定に 1つしか 持てず、★6口座では 紙から 字が 切れて 消えていた★（overflow:hidden）。
+      - name: ★相手ごとの口座（既定は全部・消えた口座は言う・3つ超で行が減る）
+        run: node seikyu/tests/bank-select.test.mjs && node seikyu/tests/bank-select.test.mjs --self-test
+      - name: ★口座の札を 実UIで押す（打たせない・0個で全部に戻る・別ウィザードなし）
+        run: node seikyu/tests/bank-ui.mjs
+      # ★消費税の一言★（2026-09-02・実物45枚とも 在った／うちの画面は 空欄に 打たせていた）
+      - name: ★消費税の一言を 札で選べる（率はlibから・押すと紙に出る・出さないで消える）
+        run: node seikyu/tests/taxnote-ask.mjs
       # ★探す★（司さん 2026-08-30「競合が当たり前にしてる事は こちらも当たり前にしてな」）
       #   請求書ソフトは どこも一覧を探せる。国税庁 電子帳簿保存法の検索要件も 同じ形
       #   （①年月日・金額・取引先 ②範囲 ③2つ以上の組み合わせ）。
@@ -315,12 +352,22 @@ jobs:
       #   ＝★本物のブラウザ(webkit)が要る★。毎回のCIには ブラウザを入れていないので
       #     ここに置くと ★毎回「未測定」＝在るのに0回★になる。
       #   ⇒ ★.github/workflows/webkit.yml（週1＋見た目を触った時）で 本当に走らせる★。
+      - name: ★会社の情報は第3の場所か (請求書→給与のリンク0本・帰り道が出る・2か所持ちが無い)
+        run: node seikyu/tests/kaisha-link.test.mjs
+      - name: ★同 わざと戻して赤になるか（給与へのリンク／帰り道／給与の打てる欄）
+        run: node seikyu/tests/kaisha-link.test.mjs --self-test
       - name: ★請求書 これはRakunallyの画面か (客が読む字・紙・取引先を外へ出さない・自社は中身を見せる)
         run: node seikyu/tests/seikyu-own-name.mjs
       - name: ★請求書 これはRakunallyの画面か (わざと他アプリの名前を戻して赤になるかの自己確認)
         run: node seikyu/tests/seikyu-own-name.mjs --self-test
 
       # ── 給与(kyuyo/) 由来（据置） ──
+      - name: Payroll unit tests (依存なし・実数リテラル+回帰)
+        run: node kyuyo/tests/run.js
+      # ★人が埋める欄を毎回 数える★（減らしたと言うなら、前と後を同じ道具で数える）。
+      #   0欄なら赤＝「画面が描けていないのに0件で緑」を作らない。
+      # ★取引先を1問ずつ聞く（聞いてあげる。埋めさせない。）★ 指示役 2026-08-18
+      #   ★空欄を並べない／当てた物は根拠つき／1問ごと保存／登録番号は当てず打ち間違いだけ弾く★
       - name: ★取引先7問 (よく出る順の候補/根拠つき/その場で返す/1問ごと保存/登録番号の検査/使わない物は聞かない)
         run: node seikyu/tests/partner-ask.test.mjs
       - name: ★取引先7問 (本物のソースを壊して赤になるかの自己確認・7通り)
@@ -328,6 +375,39 @@ jobs:
       # ★黙って消える所★（指示役 2026-08-21）
       #   #ERROR より「合計が黙って小さくなる」方が怖い（527,000 が 186,000 になった型）。
       #   ★お金・合計を作る所の catch で「黙って0を返す」物を 0件に保つ★
+      - name: ★黙って0を返す catch が お金の所に無いか
+        run: node scripts/silent-catch.mjs --check
+      - name: ★黙って0を返す catch (わざと作ったら見つけられるかの自己確認)
+        run: node scripts/silent-catch.mjs --self-test
+      - name: ★わざと失敗させて押す (公開が落ちた時に 言うか／袋小路にならないか)
+        run: node kyuyo/tests/publish-fail-ui.mjs
+      - name: ★わざと失敗させて押す (0を返す形へ戻したら赤になるかの自己確認)
+        run: node kyuyo/tests/publish-fail-ui.mjs --self-test
+      # ★出来ていない物のボタンを見せるな★（指示役の裁定 2026-08-22）
+      #   「台帳から取り込む」は ★その月の台帳が1件以上の時だけ★ 出す。0件・読めない・まだ数えていない は出さない。
+      - name: ★台帳ボタンは行数を見てから出しているか (0件/読めない/未計測で出たら赤)
+        run: node kyuyo/tests/ledger-banner.mjs
+      - name: ★台帳ボタン (行数を見ない昔の姿へ戻したら赤になるかの自己確認)
+        run: node kyuyo/tests/ledger-banner.mjs --self-test
+      # ★勤怠CSVの受け口＝お金の材料★（指示役の宿題 2026-08-23）
+      #   「時間外60時間超」は法定50%割増の材料。置き場が無いと 普通の残業として入り 払い足りない。
+      - name: ★勤怠CSVの60時間超が 本当に50%で払われるか (本物のエンジンで金額を見る)
+        run: node kyuyo/tests/kintai-csv-money.mjs
+      - name: ★勤怠CSVの60時間超 (置き場を消したら赤になるかの自己確認)
+        run: node kyuyo/tests/kintai-csv-money.mjs --self-test
+      # ★受け口は「エンジンが読む欄」を全部持つ★（指示役の決まり 2026-08-23）
+      #   欄が片方にしか無いと、その時間は低い方の欄に落ちて 払い足りない（警告0）。
+      - name: ★勤怠CSVの受け口が エンジンの割増7欄を全部 持っているか
+        run: node kyuyo/tests/csv-covers-engine.test.mjs
+      - name: ★受け口の欄を1つ消したら赤になるかの自己確認
+        run: node kyuyo/tests/csv-covers-engine.test.mjs --self-test
+      # ★給与の「今どんな状態か」を 動かして数える★（司さん 2026-08-19）
+      #   docs/STATE_kyuyo.md の数字は この道具が正。★1つ直すたびに表を手で更新する約束にしない★
+      - name: ★給与の状態を数え直す (docs/STATE_kyuyo.md の数と突き合わせ・ズレたら赤)
+        run: node scripts/state-kyuyo.mjs --check
+      - name: ★給与の状態 (数を1つずらしたら赤になるかの自己確認)
+        run: node scripts/state-kyuyo.mjs --self-test
+      # ★請求書の「今どんな状態か」を 動かして数える★（給与と同じ形・同じ道具）
       - name: ★請求書の状態を数え直す (docs/STATE_seikyu.md の数と突き合わせ・ズレたら赤)
         run: node scripts/state-seikyu.mjs --check
       - name: ★請求書の状態 (数を1つずらしたら赤になるかの自己確認)
@@ -349,16 +429,90 @@ jobs:
       #   覚書に書いた env:'prod' に釣られると ★本番で判定が逆になる★（帯を出す/タイルを出す）。
       - name: ★この repo の名札(env)を1か所で読む (覚書の env に釣られないか・9通り)
         run: node scripts/repo-env.mjs --self-test
+      - name: ★運ぶ道具の自己確認 (入口から給与のタイルを外す/法定2本も運ぶ/前後の数が同じ)
+        run: node scripts/ship-seikyu.mjs --self-test
+      # ★読ませる字は薄い黒。色は押せる物と選ばれている物だけ★（司さん・全アプリ／指示役 2026-08-18 裁定）
+      #   ★見張りは「色を書いていない」ではなく ★描かれた色★ で数える★
+      #   （前科：「色を書いていない＝正しい」を正にしたら、皮の body が緑で 字が全部 緑になった）
+      # ★打つ欄の字が16px未満だと iPhone が勝手に拡大して戻らない★（2026-08-27 指示役が本番で発見）
+      #   前の見張りは ★CSSの字に16pxと書いてあるか★ を見ていた＝★書いていない欄(既定13.33px)を1本も見ていない★。
+      #   ここでは ★描き終わった画面から 実際の px を読む★（隠れている物も数える）。
+      # ★WebKit(iOSと同じエンジン)の実測は 別のワークフローへ移した★（指示役 2026-08-28）
+      #   ★毎回は要らない／でも「毎回 未測定」は 見張りではない★ ⇒
+      #   ★.github/workflows/webkit.yml（週1＋seikyu/ を触った時）で ★本当に測る★★。
+      #   ここに残すと ★毎回 未測定★＝★在るのに0回★になるので 置かない。
       - name: ★打つ欄が16px以上か (本物のChromeで実測・隠れている物も数える)
         run: node scripts/input-size.mjs
       - name: ★打つ欄16px (わざと小さくして 捕まえられるかの自己確認)
         run: node scripts/input-size.mjs --self-test
+      - name: ★描かれた字の色を数える (13画面を本物のChromeで描かせて 控えと突き合わせる)
+        run: node scripts/text-colors.mjs
+      - name: ★描かれた字の色 (1か所ずつ色を変えて 捕まえられるかの自己確認・13通り)
+        run: node scripts/text-colors.mjs --self-test
       - name: ★取引先7問 実UI (本物の画面を動かして 押す物の一覧を出してから全部 押す)
         run: node seikyu/tests/partner-ask-ui.mjs
       # ★1つのステップで 給与と請求書を混ぜない★（指示役 2026-08-26 の運びで実際に詰まった）
       #   混ざっていると ★本番へ運ぶ時に「在る物と無い物が混ざったステップ」になって止まる★。
       #   ship-seikyu.mjs は ★勝手に直さず 赤にする★ 作りなので、元の側で分けておく。
+      - name: ★人が埋める欄を数える (給与の会社情報)
+        run: node scripts/count-fields.mjs kyuyo/index.html --sel "#set-company"
       - name: ★人が埋める欄を数える (請求書の入力・畳んだ中も)
         run: node scripts/count-fields.mjs seikyu/index.html && node scripts/count-fields.mjs seikyu/index.html --closed
       # ★会社マスタ7問（聞いてあげる。埋めさせない。）★ 司さん 2026-08-16／指示役 2026-08-18
       #   ★同じ値を2か所が持たない★（7問へ上げた物はチップから消す）を機械で見張る。
+      - name: ★会社マスタ7問 (7つ在る/県→最賃と業種→率が libの実数と一致/チップに残っていない/県が実際に効く)
+        run: node kyuyo/tests/company-ask.test.mjs
+      - name: ★会社マスタ7問 (わざと戻して赤になるかの自己確認・4通り)
+        run: node kyuyo/tests/company-ask.test.mjs --self-test
+      # ★従業員マスタ7問（1人ずつ聞く）★ 甲乙と扶養は別々の2問（指示役 2026-08-18 の訂正）
+      - name: ★従業員マスタ7問 (7つ在る/年齢で決まる物/給料は押すまで入れない/マイカーの非課税はlib/県は会社から継ぐ)
+        run: node kyuyo/tests/emp-ask.test.mjs
+      - name: ★従業員マスタ7問 (わざと戻して赤になるかの自己確認・4通り)
+        run: node kyuyo/tests/emp-ask.test.mjs --self-test
+      - name: Payroll integration (jsdomで本物のapp.jsを読み配線/UI/状態/描画)
+        run: node kyuyo/tests/integration.mjs
+      - name: Payroll full-feature real-data (給与全パターン)
+        run: node kyuyo/tests/payroll-patterns.mjs
+      - name: Payroll UI smoke (全ボタンをクリックしてJS例外0)
+        run: node kyuyo/tests/ui-smoke.mjs
+      - name: Payroll cloud sync (保存層・Supabaseモック)
+        run: node kyuyo/tests/cloud-sync.mjs
+      - name: Payroll pagination (1000件超が黙って欠落しない)
+        run: node kyuyo/tests/pagination.test.mjs
+      - name: Payroll meisai store (Web明細 公開一覧/削除時リンク失効)
+        run: node kyuyo/tests/meisai-store.mjs
+      - name: Payroll QR (復号)
+        run: node kyuyo/tests/qr.test.mjs
+      - name: Payroll 年末調整 (Web申告/計算)
+        run: node kyuyo/tests/nencho-web-declaration.test.js && node kyuyo/tests/nencho-compute.test.mjs
+      - name: Golden freeze guard (移設前の真値と入力fixtureが作り直されていないか)
+        run: node kyuyo/tests/golden-immutable.test.mjs
+      - name: Headless guard (lib/ がDOM・通信・非決定性に依存しない)
+        run: node kyuyo/scripts/verify-headless.mjs
+      - name: ★源泉区分(204条) 選べるのに算式が無い区分を残さない＋実数1円一致
+        run: node kyuyo/tests/gensen-kubun.test.mjs && node kyuyo/tests/gensen-kubun.test.mjs --self-test
+      - name: ★契約が実データの書き方を受け取れるか (画面の選択肢を機械で突き合わせ)
+        run: node kyuyo/tests/ops-real-values.test.mjs
+      - name: Ops golden parity (★1円一致★ 移設前ゴールデン vs ops/payroll.monthly)
+        run: node kyuyo/tests/ops-golden-parity.test.mjs
+      - name: Ops statutory (官公値の実数リテラル・Excel同一ソース・テストAPI非露出)
+        run: node kyuyo/tests/ops-payroll-monthly.test.mjs
+      - name: Law switchpoints (健保R7→R8/支援金2026-04/雇用保険年度/最賃年度の境界前後)
+        run: node kyuyo/tests/law-switchpoints.test.mjs
+      # ★賃金要件(88,000円)撤廃の見張り。実際にe-Govを叩くのは週1(source-urls.yml)。
+      #   ここでは【判定そのもの】が正しいかだけ見る(ネットに触らない=CIを外の都合で赤くしない)。
+      - name: ★賃金要件撤廃の見張りの判定 (--self-test・ネットに触らない)
+        run: node kyuyo/scripts/check-wage88k-removal.mjs --self-test
+      # ★最賃の年度が進んだかの見張り。実際に厚労省を叩くのは週1(source-urls.yml)。
+      #   ここでは【年度の読み取りと判定】だけ見る(ネットに触らない)。
+      #   ★実物のページは全角の「令和７年度」★＝半角だけ見ると1件も拾えない。その罠を検査で固定している。
+      - name: ★最賃の年度の見張りの判定 (--self-test・ネットに触らない)
+        run: node kyuyo/scripts/check-saitei-nendo.mjs --self-test
+      - name: Periods golden (期間分割K2が移設前と一致)
+        run: node kyuyo/tests/periods-golden.test.mjs
+      - name: Fixture reproducibility (入力fixtureが生成スクリプトと一致するか)
+        run: node kyuyo/scripts/make-input-fixture.mjs --check && node kyuyo/scripts/make-periods-fixture.mjs --check
+      - name: ★中央statutoryの写しが最新か (出典/確認日/指紋・最賃47県。手書きを2箇所に残さない)
+        run: node kyuyo/scripts/pull-statutory.mjs --check
+      - name: Statutory drift guard (lib == 中央statutory)
+        run: node kyuyo/scripts/verify-statutory.mjs

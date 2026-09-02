@@ -424,6 +424,7 @@
      ★帰り道★ 上に「← 請求書へ戻る」を出す（★飛んだ先から 元の画面へ戻れる★）。 */
   var BACK_TO = {
     seikyu: { label: '← 請求書へ戻る', href: 'seikyu/' },
+    kyuyo: { label: '← 給与へ戻る', href: 'kyuyo/' },
   };
   function openFromHash() {
     var h = String(location.hash || '').replace(/^#/, '');

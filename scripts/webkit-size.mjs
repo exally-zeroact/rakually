@@ -52,6 +52,17 @@ const PAGE_INSET_EXCEPT = {
 const EMPTY_OK = {
   'div.card.ask-card': '★聞く形の札★＝会社/従業員の7問を JS が作って入れる（kyuyo/js/app.js）。'
     + '★中身の余白は 開いた後に scripts/input-size.mjs が Chrome で測っている★。',
+  /* ★紙の下見の札★（司さん 2026-08-31「見せてあげて 変えて見せな分からん」／
+     「代行のように 請求書／集計を作って 見せ方も一緒に」）
+     ＝中身は iframe（★本物の紙★）1枚なので、字も欄も 無い＝ここでは 測れない。
+     ★紙の中は 別の見張りが 実測している★
+       seikyu/tests/pdf-align.mjs（字の位置・化け）／seal-pos.mjs（印の位置・紙から出ない）
+       ／seikyu-paper.test.mjs（紙の中の辻褄）。
+     ★戻す条件★＝この札に 字や欄を 足したら この行を 消す（また 測れる様になる）。 */
+  'div.card.set-pv-card': '★設定の紙の下見★＝中身は iframe（本物の紙）1枚。'
+    + '紙の中は pdf-align / seal-pos / seikyu-paper が 実測している。',
+  'div.card.bill-pv-card': '★請求/集計の紙の下見★＝中身は iframe（本物の紙）1枚。'
+    + '下の1行（何番の紙か）は 選んでから 出る。紙の中は 上と同じ見張りが 実測している。',
 };
 /* ★閉じている物を 全部 開けてから測る★
    ★.hidden を入れていなかった★ので、kyuyo/meisai.html の ★札8個が 3幅とも 測れていなかった★
@@ -61,33 +72,10 @@ const OPEN_ALL = '<style>.screen{display:block!important}details>*{display:block
   + '.hide{display:block!important}.hidden{display:block!important}.acc-body{display:block!important}</style>';
 
 /* ★playwright は 別の repo に入っている物を借りる★（rakually-test には入れない＝重い依存を足さない） */
-/* ★借り先★（この repo には入れない＝重い依存を足さない） */
-const LENDERS = [
-  /* ★この repo の物★（2026-08-28 案A＝devDependency に入れた） */
-  path.join(ROOT, 'node_modules/playwright/index.js'),
-  /* 手元に無い時だけ 借りる（司さんのPCで すぐ回せるように） */
-  'C:/Users/zeroa/Exally-test/node_modules/playwright/index.js',
-  'C:/Users/zeroa/Daikou-app/node_modules/playwright/index.js',
-  'C:/Users/zeroa/Daikou-app-test/node_modules/playwright/index.js',
-];
-function unmeasured(why) {
-  console.log('[webkit] ★未測定★ … ' + why);
-  console.log('  ★これは「問題なし」ではありません★。Chrome で測る scripts/input-size.mjs は 毎回 走っています。');
-  console.log('  ★測るには★ npm install && npx playwright install webkit');
-  console.log('  ★決めた1行★ この見張りは ★週1（月曜朝）と 見た目に関わる所を触った時★ に');
-  console.log('              .github/workflows/webkit.yml で ★本当に測ります★（毎回のCIには置きません）。');
-  process.exit(0);
-}
-let webkit = null;
-for (const pw of LENDERS) {
-  if (!fs.existsSync(pw)) continue;
-  try {
-    const m = await import(pathToFileURL(pw).href);
-    webkit = m.webkit || (m.default && m.default.webkit) || null;
-    if (webkit) break;
-  } catch (e) { /* 次の借り先を見る */ }
-}
-if (!webkit) unmeasured('playwright(webkit) を 借りられる場所が 見つかりません');
+import { borrow, launch as pwLaunch } from './_borrow-playwright.mjs';
+/* ★借り先と 未測定の言い方は 1か所に★（指示役の裁定 2026-09-02）
+   … scripts/_borrow-playwright.mjs（借り先4か所・週1の回だけ 赤） */
+const webkit = await borrow('webkit', 'webkit');
 
 function screens(root) {
   const out = fs.readdirSync(root).filter((f) => /\.html$/i.test(f));
@@ -113,7 +101,7 @@ function pageOf(rel) {
 }
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'wk-'));
-const b = await webkit.launch();
+const b = await pwLaunch('webkit', webkit);
 const rows = [];
 for (const rel of screens(ROOT)) {
   const f = path.join(TMP, rel.replace(/[^\w]+/g, '_') + '.html');

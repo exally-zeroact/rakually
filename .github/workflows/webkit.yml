@@ -9,14 +9,6 @@ name: WebKit（iOSと同じエンジンで測る）
 # ★測る物★ … 16px未満の打つ欄／20×20未満の押す的／横はみ出し（幅 375・390・430）
 # ★測れない時は 赤にせず「未測定」と はっきり言う★（0件と 未測定を 混ぜない）＝scripts/webkit-size.mjs
 
-# ★★ここは 本番 rakunally（請求書だけ）★★ … 元は rakually-test の CI をそのまま運んだ物。
-#   scripts/ship-seikyu.mjs が ★運び先に無いファイルを指すステップだけ★ 外して作る。
-#   ★外した理由は1つだけ＝給与の画面(kyuyo/)を運んでいないから★（機能を削った訳ではない）。
-#   ★戻す条件★: 本番にも給与を出す日（＝10月の改名・URL切替の塊）。その時 一緒に戻す。
-#   ★手で消さない★＝ここを直す時は rakually-test 側を直して 運び直す。
-#   ★外したステップ 2本★
-#     ・★押す物の見た目が全画面で揃っているか (台帳9通り・緑1種類・角丸12/999/0)  ( tests/button-uniform.test.mjs )
-#     ・★同 わざと崩して赤になるか（緑を混ぜる／字を灰色に戻す）  ( tests/button-uniform.test.mjs )
 on:
   schedule:
     # ★週1（日曜 22:00 UTC＝月曜 07:00 JST）★ … 誰も押さなくても 週に1回は 必ず測る
@@ -41,6 +33,11 @@ on:
 jobs:
   webkit:
     runs-on: ubuntu-latest
+    # ★ここは「測る為に 用意した場所」＝道具が 無いのは 用意の失敗＝赤★（指示役の裁定 2026-09-02）
+    #   手元・毎回のCI では 同じ試験が ★未測定・緑（声は 出す）★ になる。
+    #   判定は scripts/_borrow-playwright.mjs が 1か所で 持つ（★yml に 書き足さない★）。
+    env:
+      MEASURE_REQUIRED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -55,6 +52,10 @@ jobs:
         run: node scripts/webkit-size.mjs
       # ★見た目の統一★（司さん 2026-08-29「統一感は？」）＝本物のブラウザで 色の値を読む物。
       #   ★毎回のCIには置かない★（ブラウザが無いので 毎回「未測定」になる＝在るのに0回）。
+      - name: ★押す物の見た目が全画面で揃っているか (台帳9通り・緑1種類・角丸12/999/0)
+        run: node tests/button-uniform.test.mjs
+      - name: ★同 わざと崩して赤になるか（緑を混ぜる／字を灰色に戻す）
+        run: node tests/button-uniform.test.mjs --self-test
       - name: ★請求書 聞く形のボタンの色 (画面の本命/ほかと同じ・緑は1種類・押す的20×20)
         run: node seikyu/tests/pask-color.test.mjs
       - name: ★同 わざと色を戻して赤になるか
@@ -83,3 +84,13 @@ jobs:
         run: node seikyu/tests/seal-pos.mjs
       - name: ★同 紙から出さない蓋が効いているか
         run: node seikyu/tests/seal-pos.mjs --self-test
+      # ★紙は 本物のブラウザで 測る★（2026-09-02・口座1〜6 × 明細1/10/20行 × 控除なし/あり＝36通り）
+      #   直す前は ★6口座で 口座番号が 丸ごと 消えていた★（.sheet は overflow:hidden＝黙って 切れる）
+      - name: ★口座を何個出しても 紙から 字が消えない（36通り 実測）
+        run: node seikyu/tests/bank-paper.mjs
+      - name: ★同 わざと直す前の形にすると はみ出すか（自己確認）
+        run: node seikyu/tests/bank-paper.mjs --self-test
+      # ★聞く形の札が 読めるか★（指示役の判定 2026-09-02＝口座の札が「1つの塊」に見えて 差し戻し）
+      #   ★これは 数字には 1つも 出ない★ので 描いた物を 375/390/430 で 測る。
+      - name: ★口座は1つずつ別の箱・選んだ札だけが光る（375/390/430で実測）
+        run: node seikyu/tests/ask-look-webkit.mjs
