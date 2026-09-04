@@ -1158,5 +1158,301 @@ await TA('★② 押せる時も 公開の前に確認が出る（取り消せ�
   });
 });
 
+/* ══ 月額変更届の 電子申請 CSV の ★配線★（2026-09-04）════════════════════
+   ★lib が 緑でも、画面から 渡っていなければ 1バイトも 出ない★
+   ⇒★app.js の 中身を 実際に 動かして★ 確かめる（ソースを 読むだけの 試験に しない）。 */
+T('★月額変更届の CSV が 画面から 本当に 作れる（配線）', () => {
+  const A = win.__PAYSLIP_TEST, TD = win.TodokedeCsv;
+  ok(A && A.gekkakuRows && A.gekkakuCsvInput && A.gekkakuCsvBox, '★試験の 口が 無い★');
+  ok(TD && TD.gekkakuRow, '★TodokedeCsv が 読めていない★');
+  const st = A.state;
+  const keep = { c: st.company, e: st.employees, m: st.month };
+  try {
+    st.company = Object.assign({}, st.company, {
+      name: '株式会社テスト', pref: 'tokyo', seiriKigou: '01-ｹｲﾄ', jigyoshoNo: '12345',
+      zip: '100-0001', addr: '東京都千代田区1-1', nushi: '試験　太郎', tel: '03-1234-5678', baitaiTsuban: 0
+    });
+    st.month = '2026-07';
+    const hito = (id, name, kana, stype) => ({
+      id: id, name: name, kana: kana, birthYmd: '1985-05-05', hokenshaNo: String(id),
+      shortTimeType: stype || '', zenzenKaiteiYmd: '2025-09-01', joinYmd: '2015-04-01',
+      shaho: { henkoYm: '2026-04', fixedChanged: true, prevHyojun: 260000 }
+    });
+    /* 1＝20日（出せる）／2＝16日（★3か月とも 17日以上でない＝出せない★） */
+    st.employees = [hito(1, '年金　太郎', 'ﾈﾝｷﾝ ﾀﾛｳ'), hito(2, '年金　次郎', 'ﾈﾝｷﾝ ｼﾞﾛｳ')];
+    const recs = [];
+    [1, 2].forEach((id) => ['2026-04', '2026-05', '2026-06'].forEach((ym, i) => {
+      recs.push({ employee_id: id, ym: ym, data: { kind: 'monthly',
+        paymentDays: id === 1 ? 20 : 16, shikyuTotal: 300000 + i * 10000, genbutsuTotal: 0 } });
+    }));
+    const rows = A.gekkakuRows(recs, st.employees);
+    eq(rows.length, 2, '★対象者が 拾えていない★');
+
+    /* ★渡す物が 揃っているか（渡し忘れが 一番 怖い）★ */
+    const inp = A.gekkakuCsvInput(rows[0]);
+    eq(inp.henkoYm, '2026-04', '変動月');
+    eq(inp.zenzen.kaiteiYmd, '2025-09-01', '★従前の 改定月を 渡していない★');
+    eq(inp.jimusho.todofuken, '21', '★都道府県コード（東京＝21）を 渡していない★');
+    eq(inp.months.length, 3, '3か月');
+    eq(inp.months[0].days, 20, '日数');
+    ok('genbutsu' in inp.months[0], '★現物を 渡していない★');
+
+    /* ★出せる／出せないの 振り分け★ */
+    eq(TD.dasuKaGekkaku(A.gekkakuCsvInput(rows[0])), true, '★20日の人を 外している★');
+    eq(TD.dasuKaGekkaku(A.gekkakuCsvInput(rows[1])), false, '★16日の人を 入れている★');
+
+    /* ★画面の 箱＝ボタンの 札と 警告が 実物と 合う★ */
+    const html = A.gekkakuCsvBox(rows);
+    ok(/id="b-gekkaku-csv"/.test(html), '★ボタンが 出ていない★');
+    ok(/1人・SHFD0006\.CSV/.test(html), '★札が 実際に 出せる 人数（1人）に なっていない★ … ' + (/CSVを作る（[^<]*）/.exec(html) || [])[0]);
+    ok(/年金　次郎/.test(html) && /17日以上/.test(html), '★出せない人の 名前と 理由を 出していない★');
+
+    /* ★本当に 作れるか（1バイトも 出ないのが 一番 多い 失敗）★ */
+    const deru = rows.filter((x) => TD.dasuKaGekkaku(A.gekkakuCsvInput(x)));
+    const f = TD.gekkakuCsv({ jimusho: A.gekkakuCsvInput(deru[0]).jimusho,
+      baitai: { tsuban: '001', ymd: '2026-07-01' },
+      rows: deru.map((x) => TD.gekkakuRow(A.gekkakuCsvInput(x))) });
+    ok(f.bytes.length > 0, '★0バイト★');
+    eq(f.name, 'SHFD0006.CSV', 'ファイル名');
+    const lines = f.text.split(TD.CRLF).filter((x) => x.length);
+    const data = lines[lines.length - 1].split(',');
+    eq(data.length, 49, '★項目数★');
+    eq(data[0], '2221700', '★様式コード★');
+    eq(data[9] + '/' + data[10] + '/' + data[11], '9/08/07', '★改定年月（令和8年7月）★');
+    eq(data[36], '0930000', '★総計（30万+31万+32万）★');
+    eq(data[37], '0310000', '★平均額（93万÷3）★');
+    console.log('     実物 … ' + f.bytes.length + 'バイト／' + lines.length + '行／49項目／総計 ' + data[36] + '／平均 ' + data[37]);
+  } finally { st.company = keep.c; st.employees = keep.e; st.month = keep.m; }
+});
+
+/* ══ 算定基礎届の 配線（2026-09-04）════════════════════════════════════
+   ★月変の 配線を 壊すと 赤に なったのに、算定を 同じ様に 壊しても 緑のままだった★
+   ＝★算定の 配線を 実際に 動かして 見ている 試験が 無かった★（見張りが ソースを 読むだけ だった）。 */
+T('★算定基礎届の CSV が 画面から 本当に 作れる（配線）', () => {
+  const A = win.__PAYSLIP_TEST, TD = win.TodokedeCsv;
+  ok(A && A.santeiRows && A.santeiCsvInput, '★試験の 口が 無い★');
+  const st = A.state;
+  const keep = { c: st.company, e: st.employees, m: st.month };
+  try {
+    st.company = Object.assign({}, st.company, {
+      name: '株式会社テスト', pref: 'tokyo', seiriKigou: '01-ｹｲﾄ', jigyoshoNo: '12345',
+      zip: '100-0001', addr: '東京都千代田区1-1', nushi: '試験　太郎', tel: '03-1234-5678', baitaiTsuban: 0
+    });
+    st.month = '2026-07';
+    const hito = (id, name, kana, stype, umare) => ({
+      id: id, name: name, kana: kana, birthYmd: umare || '1985-05-05', hokenshaNo: String(id),
+      shortTimeType: stype || '', zenzenKaiteiYmd: '2025-09-01', joinYmd: '2015-04-01', shaho: {}
+    });
+    st.employees = [hito(1, '年金　太郎', 'ﾈﾝｷﾝ ﾀﾛｳ'), hito(2, '年金　花子', 'ﾈﾝｷﾝ ﾊﾅｺ', 'part')];
+    const recs = [];
+    [1, 2].forEach((id) => ['2026-04', '2026-05', '2026-06'].forEach((ym, i) => {
+      recs.push({ employee_id: id, ym: ym, data: { kind: 'monthly',
+        paymentDays: id === 1 ? (i === 1 ? 16 : 17 + i) : 16,
+        shikyuTotal: id === 1 ? [300000, 200000, 310000][i] : 100000, genbutsuTotal: 0 } });
+    }));
+    const rows = A.santeiRows(recs, 2026, st.employees);
+    eq(rows.length, 2, '★対象者が 拾えていない★');
+
+    const inp = A.santeiCsvInput(rows[0], 2026);
+    eq(inp.jimusho.todofuken, '21', '★都道府県コード（東京＝21）を 渡していない★');
+    ok(inp.rule && inp.rule.primary === 17, '★日数の 線（santeiRule）を 渡していない★');
+    ok(inp.bikou && 'over70' in inp.bikou, '★備考を 渡していない★');
+
+    /* ★一般＝17/16/18 ⇒ 対象は 4月と6月だけ（★5月の 20万を 足さない★） */
+    const r1 = TD.santeiRow(inp);
+    eq(r1[36], '0610000', '★総計★（61万 のはず／81万なら 3か月 全部を 足している）');
+    eq(r1[37], '0305000', '★平均額★（61万÷2）');
+
+    /* ★パート＝16日×3 ⇒ 15日の 特例で 出せる＋★備考欄項目7（パート）に 1★ */
+    const inp2 = A.santeiCsvInput(rows[1], 2026);
+    ok(inp2.rule.fallback === 15, '★パートの 15日を 渡していない★');
+    eq(TD.dasuKa(inp2), true, '★パートを 外している★');
+    eq(TD.santeiRow(inp2)[49], '1', '★備考欄項目7（パート）に 印が 付いていない★');
+    console.log('     算定 … 総計 ' + r1[36] + '／平均 ' + r1[37] + '／パートの印 ' + TD.santeiRow(inp2)[49]);
+  } finally { st.company = keep.c; st.employees = keep.e; st.month = keep.m; }
+});
+
+/* ══ 労働保険料の 端数（2026-09-04 一次情報で 見つけた）════════════════════
+   ★厚生労働省「令和８年度 労働保険年度更新申告書の書き方（継続事業用）」Ｑ３ 原文★
+     「保険料（一般拠出金）の計算をしたら小数点以下が発生しました。切り捨てですか、切り上げですか？
+       Ａ．★切り捨て★になります。
+       　なお、労災保険と雇用保険の算定基礎額が★同額の場合★は、
+       　★別々に計算して切り捨てるのではなく、両保険の算定基礎額を両保険の料率の合計に乗じ、
+       　　その後切り捨てて★ください。（記入例４（P.27）をご参照ください。）」
+   ★うちは 別々に 切り捨てて 足していた★＝実測で ★1円 ずれる★
+     算定基礎額 1,233,400 → 千円未満切捨 1,233,000／労災 2.5‰・雇用 15.5‰
+       別々に 切り捨て … 3,082＋19,111＝★22,193★
+       合計率に 乗じてから … 1,233,000×18.0‰＝★22,194★
+   ★申告書に 書く 数字が 1円 違う★＝差額の やりとりに なる。 */
+T('★労働保険料＝算定基礎額が 同額なら 合計率に 乗じてから 切り捨てる（厚労省 Q3）', () => {
+  const A = win.__PAYSLIP_TEST;
+  ok(A && A.roudouGokei, '★roudouGokei が 無い★＝合計の 出し方が 1か所に なっていない');
+  /* ★同額の 組★＝合計率に 乗じてから 1回 切り捨て */
+  const r1 = A.roudouGokei(1233400, 1233400, 2.5 / 1000, 15.5 / 1000);
+  eq(r1.gokei, 22194, '★同額なのに 別々に 切り捨てている★');
+  eq(r1.awaseta, true, '★合わせて 計算した 印が 立っていない★');
+  /* ★違う額の 組★＝別々に 切り捨てる（原文の「同額の場合」に 当たらない） */
+  const r2 = A.roudouGokei(1233400, 1000400, 2.5 / 1000, 15.5 / 1000);
+  eq(r2.awaseta, false, '★違う額なのに 合わせている★');
+  eq(r2.gokei, Math.floor(1233000 * 2.5 / 1000) + Math.floor(1000000 * 15.5 / 1000), '★別々の 足し算が 合わない★');
+  /* ★率が 分からない時は 数字を 作らない★ */
+  eq(A.roudouGokei(1233400, 1233400, null, 15.5 / 1000).gokei, null, '★労災率が 無いのに 合計を 出している★');
+  eq(A.roudouGokei(1233400, 1233400, 2.5 / 1000, null).gokei, null, '★雇用率が 無いのに 合計を 出している★');
+  console.log('     労働保険料 … 同額 ' + r1.gokei + '円（合わせた）／違う額 ' + r2.gokei + '円（別々）');
+});
+
+T('★画面（集計表）が その合計を 使っている（2か所で 別々に 計算しない）', () => {
+  const A = win.__PAYSLIP_TEST;
+  const st = A.state;
+  const keep = { c: st.company, e: st.employees, m: st.month };
+  try {
+    st.company = Object.assign({}, st.company, { name: '株式会社テスト', gyoshu: 'ippan', rousaiRate: 2.5 });
+    st.month = '2026-07';
+    st.employees = [];
+    const sum = A.roudouSummary([], A.roudouFYof(), []);
+    ok('gokeiRyo' in sum, '★集計に 合計（gokeiRyo）が 無い★＝申告書に 書く 数字が 出ていない');
+    ok('awaseta' in sum, '★合わせて 計算したかどうかが 出ていない★');
+  } finally { st.company = keep.c; st.employees = keep.e; st.month = keep.m; }
+});
+
+/* ══ 労災保険率＝手入力を やめる（2026-09-04）════════════════════════════
+   ★2026-09-04 まで 労災率は 会社が ‰ を 手で 打ち込む だけ★＝★間違えても 誰も 気づけない★。
+   （app.js の 古い 注記にも「労災率…部品も 一次情報も 無い」と 書いてあった＝★もう 嘘★）
+   ★出どころが 見つかった★＝労働保険の保険料の徴収等に関する法律施行規則 別表第１（e-Gov 法令検索）
+     ⇒ kyuyo/lib/rousai-ritsu.js（★53業種★）／法令との 突き合わせは 週1（check-rousai-ritsu.mjs）
+   ★ここでは「画面が その表から 率を 出しているか」を 実際に 動かして 見る★ */
+T('★労災保険率＝業種を 選べば 率が 出る（手で 打たせない）', () => {
+  const A = win.__PAYSLIP_TEST, RR = win.RousaiRitsu;
+  ok(RR && RR.COUNT === 53, '★労災保険率表（53業種）が 読めていない★');
+  ok(A && A.rousaiPermilOf, '★rousaiPermilOf が 無い★＝率の 出どころが 1か所に なっていない');
+  eq(A.rousaiPermilOf({ rousaiShurui: '林業' }), 52, '★選んだ 業種から 率が 出ない★');
+  eq(A.rousaiPermilOf({ rousaiShurui: 'その他の各種事業' }), 3, '★その他の各種事業★');
+  eq(A.rousaiPermilOf({ rousaiShurui: '船舶所有者の事業' }), 42, '★船舶所有者（別表に 無い・第十六条 本文）★');
+  /* ★一覧に 無い時だけ 手入力★（2か所から 別々に 決めない） */
+  eq(A.rousaiPermilOf({ rousaiShurui: '', rousaiRate: '2.5' }), 2.5, '★一覧に 無い時の 手入力が 効かない★');
+  /* ★選んだら 手入力より 業種が 勝つ★（同じ物を 2か所で 決めない） */
+  eq(A.rousaiPermilOf({ rousaiShurui: '林業', rousaiRate: '99' }), 52, '★手入力が 業種を 上書きしている★');
+  /* ★どちらも 無ければ 0では なく null★ */
+  eq(A.rousaiPermilOf({}), null, '★何も 無いのに 数字を 出している★');
+  console.log('     労災率 … 林業 ' + A.rousaiPermilOf({ rousaiShurui: '林業' }) + '‰／表 ' + RR.COUNT + '業種');
+});
+
+T('★画面に 業種を 選ぶ所が 出ている（打ち込ませない）', () => {
+  const A = win.__PAYSLIP_TEST;
+  const st = A.state;
+  const keep = { c: st.company, e: st.employees, m: st.month };
+  try {
+    st.company = Object.assign({}, st.company, { name: '株式会社テスト', gyoshu: 'ippan', rousaiShurui: '林業' });
+    st.month = '2026-07';
+    /* ★材料が 無いと 表ごと 出ない★（2026-09-04＝空で 測って 空振りした） */
+    st.employees = [{ id: 1, name: '年金　太郎', kana: 'ﾈﾝｷﾝ ﾀﾛｳ', birthYmd: '1985-05-05', payType: '月給' }];
+    const fy = A.roudouFYof();
+    const recs = [];
+    for (let m = 0; m < 12; m++) {
+      const mm = 4 + m, yy = fy + (mm > 12 ? 1 : 0), m2 = mm > 12 ? mm - 12 : mm;
+      recs.push({ employee_id: 1, ym: yy + '-' + ('0' + m2).slice(-2), data: { kind: 'monthly', shikyuTotal: 300000 } });
+    }
+    const sum = A.roudouSummary(recs, fy, st.employees);
+    ok(sum.rousaiWageTotal === 3600000, '★賃金計が ' + sum.rousaiWageTotal + '★（360万 のはず）');
+    ok(sum.rousaiPermil === 52, '★選んだ 林業（52‰）が 効いていない★ … ' + sum.rousaiPermil);
+    const html = A.roudouHTML(sum, fy);
+    ok(/data-rousai-shurui/.test(html), '★業種を 選ぶ所が 無い★');
+    ok(/その他の各種事業/.test(html), '★一覧の 中身が 出ていない★');
+    ok(/林業/.test(html), '★選んだ 業種が 出ていない★');
+  } finally { st.company = keep.c; st.employees = keep.e; st.month = keep.m; }
+});
+
+/* ══ 申告書に 書く 数字が 画面から 出るか（2026-09-04）══════════════════
+   ★lib が 緑でも、画面が 呼んでいなければ 1つも 出ない★ */
+T('★申告書の 数字（一般拠出金・概算・延納・期別）が 集計から 出る', () => {
+  const A = win.__PAYSLIP_TEST;
+  const st = A.state;
+  const keep = { c: st.company, e: st.employees, m: st.month };
+  try {
+    st.company = Object.assign({}, st.company, { name: '株式会社テスト', gyoshu: 'ippan', rousaiShurui: '林業' });
+    st.month = '2026-07';
+    st.employees = [{ id: 1, name: '年金　太郎', kana: 'ﾈﾝｷﾝ ﾀﾛｳ', birthYmd: '1985-05-05', payType: '月給' }];
+    const fy = A.roudouFYof();
+    const recs = [];
+    for (let m = 0; m < 12; m++) {
+      const mm = 4 + m, yy = fy + (mm > 12 ? 1 : 0), m2 = mm > 12 ? mm - 12 : mm;
+      /* ★わざと 3で 割り切れない 額に する★（端数を 1期に 寄せる所を 配線でも 捕まえる為） */
+      recs.push({ employee_id: 1, ym: yy + '-' + ('0' + m2).slice(-2), data: { kind: 'monthly', shikyuTotal: m === 11 ? 998000 : 1000000 } });
+    }
+    const sum = A.roudouSummary(recs, fy, st.employees);
+    eq(sum.rousaiWageTotal, 11998000, '賃金計');
+    ok(sum.ippan, '★一般拠出金が 出ていない★');
+    eq(sum.ippan.gaku, 239, '★一般拠出金（11,998,000×0.02/1000＝239.96→239）★');
+    eq(sum.ippan.gaisanNashi, true, '★概算払いは 無い★');
+    eq(sum.awaseta, true, '★算定基礎額が 同額なのに 合わせていない★');
+    ok(sum.gokeiRyo > 600000, '★確定保険料が 小さすぎる★ … ' + sum.gokeiRyo);
+    ok(sum.enno && sum.enno.ok === true, '★延納できるはずが できない★ … ' + (sum.enno && sum.enno.riyu));
+    ok(sum.kibetsu && sum.kibetsu.ki.length === 3, '★3期に 分けていない★');
+    eq(sum.kibetsu.ki[0] + sum.kibetsu.ki[1] + sum.kibetsu.ki[2], sum.gaisan.gaku, '★分けた 合計が 元と 違う★');
+    ok(sum.kibetsu.amari > 0, '★端数が 出ない 材料で 測っている★（寄せ先を 確かめられない）');
+    eq(sum.kibetsu.ki[0] - sum.kibetsu.ki[1], sum.kibetsu.amari, '★端数を 第1期に 合算していない★');
+    eq(sum.kibetsu.ki[1], sum.kibetsu.ki[2], '★2期と 3期は 同じ★');
+    const moji = JSON.stringify(A.roudouAoa(sum, fy));
+    ok(/一般拠出金/.test(moji), '★Excel に 一般拠出金が 無い★');
+    /* ★未測定は 画面にも 出す★（2026-09-04 指示役）
+       ＝★Excel を 開かない 人には 伝わらない★／紙を 見る人と 画面を 見る人は 別 */
+    const gamen = A.roudouHTML(sum, fy);
+    ok(/一般拠出金/.test(gamen), '★画面に 一般拠出金が 出ていない★');
+    ok(/確かめられていません|未測定/.test(gamen),
+      '★画面に「まだ 原文で 確かめられていない」と 書いていない★＝Excelだけでは 伝わらない');
+    ok(/概算保険料/.test(moji), '★Excel に 概算保険料が 無い★');
+    ok(/第1期/.test(moji), '★Excel に 期別が 無い★');
+    ok(/端数計算に関する法律/.test(moji), '★端数の 出どころを 書いていない★');
+    console.log('     申告書 … 確定 ' + sum.gokeiRyo + '円／一般拠出金 ' + sum.ippan.gaku
+      + '円／概算 ' + sum.gaisan.gaku + '円／期別 ' + sum.kibetsu.ki.join('・'));
+  } finally { st.company = keep.c; st.employees = keep.e; st.month = keep.m; }
+});
+
+/* ══ 精算（充当・還付）＝前年度に 納めた 概算を 聞いて 出す（2026-09-04）══════
+   ★計算は 出来ていたのに「額を 聞く所」が 無くて 出せなかった★＝聞く所を 作った。
+   ★[[feedback_ask_dont_fill_all_apps]]★＝聞いてあげる（埋めさせない）。 */
+T('★精算＝前年度に 納めた 概算を 入れると 不足／充当が 出る', () => {
+  const A = win.__PAYSLIP_TEST;
+  const st = A.state;
+  const keep = { c: st.company, e: st.employees, m: st.month };
+  try {
+    st.company = Object.assign({}, st.company, { name: '株式会社テスト', gyoshu: 'ippan', rousaiShurui: '林業', zennendoGaisan: '700000' });
+    st.month = '2026-07';
+    st.employees = [{ id: 1, name: '年金　太郎', kana: 'ﾈﾝｷﾝ ﾀﾛｳ', birthYmd: '1985-05-05', payType: '月給' }];
+    const fy = A.roudouFYof();
+    const recs = [];
+    for (let m = 0; m < 12; m++) {
+      const mm = 4 + m, yy = fy + (mm > 12 ? 1 : 0), m2 = mm > 12 ? mm - 12 : mm;
+      recs.push({ employee_id: 1, ym: yy + '-' + ('0' + m2).slice(-2), data: { kind: 'monthly', shikyuTotal: m === 11 ? 998000 : 1000000 } });
+    }
+    const sum = A.roudouSummary(recs, fy, st.employees);
+    ok(sum.seisan && sum.seisan.measured, '★精算が 出ていない★');
+    eq(sum.seisan.kubun, 'fusoku', '★確定 785,869 ＞ 概算 700,000＝不足★');
+    eq(sum.seisan.gaku, 85869, '★不足額★');
+    /* ★多く 納めていた 組★ */
+    st.company.zennendoGaisan = '900000';
+    const s2 = A.roudouSummary(recs, fy, st.employees);
+    eq(s2.seisan.kubun, 'amari', '★確定 785,869 ＜ 概算 900,000＝余り★');
+    eq(s2.seisan.gaku, 114131, '★余りの 額★');
+    /* ★入れていない時は 数字を 作らない★ */
+    st.company.zennendoGaisan = '';
+    eq(A.roudouSummary(recs, fy, st.employees).seisan.measured, false, '★入れていないのに 数字を 出している★');
+    /* ★画面に 聞く所が 在る★ */
+    st.company.zennendoGaisan = '700000';
+    const html = A.roudouHTML(sum, fy);
+    ok(/data-zennendo-gaisan/.test(html), '★前年度の 概算を 聞く所が 無い★');
+    /* ★Excel に 出る★（★不足の 組★と ★多く 納めた 組★は 別の 文） */
+    const m1 = JSON.stringify(A.roudouAoa(A.roudouSummary(recs, fy, st.employees), fy));
+    ok(/不足/.test(m1), '★Excel に 精算（不足）が 無い★');
+    ok(!/還付請求書/.test(m1), '★不足なのに 還付の 話を 出している★');
+    st.company.zennendoGaisan = '900000';
+    const m2 = JSON.stringify(A.roudouAoa(A.roudouSummary(recs, fy, st.employees), fy));
+    ok(/多く 納めています/.test(m2), '★Excel に 精算（余り）が 無い★');
+    ok(/還付請求書/.test(m2), '★還付は 申告書だけでは 戻らない事を 書いていない★');
+    st.company.zennendoGaisan = '700000';
+    console.log('     精算 … 不足 ' + sum.seisan.gaku + '円／多く 納めた時 ' + s2.seisan.gaku + '円');
+  } finally { st.company = keep.c; st.employees = keep.e; st.month = keep.m; }
+});
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
