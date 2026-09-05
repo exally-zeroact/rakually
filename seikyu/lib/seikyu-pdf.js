@@ -373,9 +373,14 @@
       } catch (e) { slim = null; _slimInfo = { err: String(e && e.message).slice(0, 120) }; }
 
       return embedAll.then(function () {
+        /* ★字を 使った分だけ 埋めるか★（既定は 今までどおり 丸ごと）
+           ★2026-09-05 司さん「請求書1枚で 重すぎるやろが／構造がおかしいんやろが」★
+             実測＝実物の 請求書PDF 327本の 中央値 0.31MB に対し うちは 2.94MB（9.4倍）。
+             PDFの 94% が 字体（4.45MB・13,932字）＝1通の紙に 全字入りの 辞書を 同梱していた。
+           ここは まだ 既定を 変えていない（下の 確かめが 通ってから 変える）。 */
         /* ★渡すのは 間引いた字体・でも subset は false★
            ＝pdf-lib の 壊れている 間引きの 道を 通らない。 */
-        return doc.embedFont(slim || a.fontBytes, { subset: false });
+        return doc.embedFont(slim || a.fontBytes, { subset: (o.subset === true) });
       }).then(function (font) {
         pages.forEach(function (pg) {
           var page = doc.addPage([PT_W, PT_H]);
