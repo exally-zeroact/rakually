@@ -1454,5 +1454,166 @@ T('★精算＝前年度に 納めた 概算を 入れると 不足／充当が 
   } finally { st.company = keep.c; st.employees = keep.e; st.month = keep.m; }
 });
 
+/* ══ 賞与支払届の CSV が 画面から 出るか（2026-09-05）══════════════════
+   ★lib が 緑でも、画面が 呼んでいなければ 1バイトも 出ない★
+   ★画面が 元から 持っていた 穴★
+     bonusHarauRows … genbutsu:0 打ち込み／goukei:tsuka（★1,000円未満を 切り捨てていない★） */
+T('★賞与支払届の CSV が 画面から 本当に 作れる（配線）', () => {
+  const A = win.__PAYSLIP_TEST, TD = win.TodokedeCsv;
+  ok(A && A.bonusHarauRows && A.shoyoCsvInput, '★試験の 口が 無い★（shoyoCsvInput）');
+  const st = A.state;
+  const keep = { c: st.company, e: st.employees, m: st.month, b: st.bonus };
+  try {
+    st.company = Object.assign({}, st.company, {
+      name: '株式会社テスト', pref: 'tokyo', seiriKigou: '01-ｹｲﾄ', jigyoshoNo: '123',
+      zip: '100-0000', addr: '東京都千代田区霞が関１－２－２', nushi: '試験　太郎',
+      tel: '03-1234-5678', baitaiTsuban: 0
+    });
+    st.month = '2026-07';
+    st.employees = [{ id: 1, name: '年金　太郎', kana: 'ﾈﾝｷﾝ ﾀﾛｳ', birthYmd: '1975-01-11',
+      hokenshaNo: '1', payType: '月給', joinYmd: '2015-04-01' }];
+    /* ★1,000円未満が 出る 額★＝切り捨てを 配線でも 捕まえる */
+    st.bonus = { payYm: '2026-07', payDay: '2026-07-10', byEmp: { 1: { amount: '500500', addShikyu: [], addKojo: [] } } };
+    const rows = A.bonusHarauRows();
+    eq(rows.length, 1, '★対象者が 拾えていない★');
+    const inp = A.shoyoCsvInput(rows[0]);
+    eq(inp.harauYmd, '2026-07-10', '★払った 日を 渡していない★');
+    eq(inp.jimusho.todofuken, '21', '★都道府県コード★');
+    ok('genbutsu' in inp, '★現物を 渡していない★');
+    ok(TD.dasuKaShoyo(inp) === true, '★出せる人を 外している★');
+    const r = TD.shoyoRow(inp);
+    eq(r[0], '2265700', '★様式コード★');
+    eq(r.length, 21, '★項目数★');
+    eq(r[11], '0500500', '★通貨は そのまま★');
+    eq(r[13], '0500000', '★合計＝1,000円未満 切り捨て★（500,500 → 500,000）');
+    const f = TD.shoyoCsv({ jimusho: inp.jimusho, baitai: { tsuban: '001', ymd: '2026-07-15' }, rows: [r] });
+    ok(f.bytes.length > 0 && f.kensa.errors.length === 0, '★0バイト／検査で 落ちた★ … ' + JSON.stringify(f.kensa.errors));
+    const html = A.bonusHarauHTML ? A.bonusHarauHTML(rows) : '';
+    console.log('     賞与 … ' + f.bytes.length + 'バイト／通貨 ' + r[11] + '／合計 ' + r[13]);
+  } finally { st.company = keep.c; st.employees = keep.e; st.month = keep.m; st.bonus = keep.b; }
+});
+
+/* ══ 何が 出せるかの 表（2026-09-05 指示役）══════════════════════════
+   ★お客さんが「何が 出せるか」を 見て 分かる★／★出来ていない 物の ボタンは 出さない★
+   ★一番 大事★＝★「出せる」を 手書きに しない★
+     ＝実物（TodokedeCsv に 作る 関数が 在るか）から 出す
+     ＝★手で 書くと 画面が 嘘に なる★（2026-09-04 の「◯つ」と 同じ 型） */
+T('★何が出せるかの表＝「出せる」を実物から出している（手書きでない）', () => {
+  const A = win.__PAYSLIP_TEST, TD = win.TodokedeCsv;
+  ok(A && A.todokedeIchiran, '★todokedeIchiran が 無い★');
+  const list = A.todokedeIchiran();
+  ok(list.length >= 8, '★' + list.length + '件★（8件 以上 のはず）');
+  /* ★出せる＝実物に 作る 関数が 在る★ */
+  const dekiru = list.filter((x) => x.dekiru);
+  /* ★2026-09-05 3件→4件★（資格取得届 2200700 を 足した）
+     ★手書きの 数では ない★＝TodokedeCsv に 作る 関数が 在るかで 決まるので、
+     lib に 足した その日に ★この行が 自分で 赤に なった★（3のはずが 4）。
+     ⇒★表が 実物から 出ている 証拠★。数を 上げる時は 名前も 一緒に 確かめる。 */
+  /* ★4件の まま★＝資格喪失届は ★作っても 出せない★ので 増えない（2026-09-05）
+     ★これは 表の 穴では ない★＝★預かっていない 物が 要る★という 別の 理由。
+     ★戻す条件★＝司さんが「基礎年金番号を お預かりする」と 決めた日（5件に なる）。 */
+  eq(dekiru.length, 4, '★出せるのが ' + dekiru.length + '件★（算定・月変・賞与・資格取得の 4件 のはず）');
+  ok(dekiru.some((x) => x.nm === '資格取得届'), '★資格取得届が「出せます」に なっていない★');
+  ok(!list.some((x) => x.nm === '資格取得届' && x.riyu), '★資格取得届に まだ「これから 作ります」が 付いている★');
+  ok(dekiru.every((x) => typeof TD[x.tsukuru] === 'function'), '★出せると 書いてあるのに 作る 関数が 無い★');
+  /* ★まだ＝作る 関数が 無い★ */
+  const mada = list.filter((x) => !x.dekiru);
+  ok(mada.every((x) => !x.tsukuru || typeof TD[x.tsukuru] !== 'function'), '★出せるのに「まだ」と 書いている★');
+  /* ★「まだ」の 理由は 2つに 分かれる★ */
+  ok(mada.some((x) => x.riyu === 'uchi'), '★うちが 作っていない 物が 無い★');
+  ok(mada.some((x) => x.riyu === 'nenkin'), '★年金機構の 検査が 対応していない 物が 無い★');
+  /* ★3段目＝預かっていない 物が 要る★（2026-09-05・資格喪失届）
+     ★原文★ csv201.pdf 項番12「『個人番号』に入力がない場合 入力されていること」
+     ⇒ マイナンバーか 基礎年金番号の どちらかが 必須／うちは どちらも 預かっていない
+     ⇒★「これから 作ります」だと「待てば 出せる」と 読める＝嘘★ */
+  ok(mada.some((x) => x.riyu === 'azukari'), '★預かっていない 物が 要る（基礎年金番号）が 無い★');
+  const so = list.find((x) => x.nm === '資格喪失届');
+  ok(so && so.dekiru === false && so.riyu === 'azukari',
+    '★資格喪失届の 理由が「預かっていない 物が 要る」に なっていない★');
+  /* ★お客さんの 言葉が 先・様式の 番号は 添えるだけ★ */
+  ok(list.every((x) => x.itsu && x.itsu.length >= 3), '★「いつ 出すか」が 書いていない★');
+  ok(list.every((x) => /^2[0-9]{6}$/.test(x.yoshiki)), '★様式コードが 無い★');
+  console.log('     届出 ' + list.length + '件 … 出せる ' + dekiru.length + '／まだ ' + mada.length
+    + '（うちが作っていない ' + mada.filter((x) => x.riyu === 'uchi').length
+    + '／年金機構が対応していない ' + mada.filter((x) => x.riyu === 'nenkin').length
+    + '／預かっていない物が要る ' + mada.filter((x) => x.riyu === 'azukari').length + '）');
+});
+
+T('★表が 画面に 出る（お客さんの 言葉で）', () => {
+  const A = win.__PAYSLIP_TEST;
+  ok(A.todokedeIchiranHTML, '★todokedeIchiranHTML が 無い★');
+  const html = A.todokedeIchiranHTML();
+  ok(/入社した/.test(html), '★お客さんの 言葉（入社した 時）が 無い★');
+  ok(/算定基礎届/.test(html) && /賞与支払届/.test(html), '★届出の 名前が 無い★');
+  ok(/年金機構/.test(html), '★年金機構の 検査が 対応していない 事を 書いていない★');
+  ok(/基礎年金番号が 要ります/.test(html), '★預かっていない 物が 要る 事を 画面に 書いていない★');
+  ok(!/資格喪失届[\s\S]{0,120}これから 作ります/.test(html), '★資格喪失届に「これから 作ります」が 残っている（待てば 出せると 読める）★');
+  ok(!/未対応|準備中|開発中/.test(html), '★出来ていない物の 言葉を 出している★');
+});
+
+T('★資格取得届に 要る 2つの 欄が 従業員マスタに 出ている（性別・住所カナ）', () => {
+  const A = win.__PAYSLIP_TEST;
+  const mae = A.state.employees;
+  try {
+    const e = A.defEmp('山田　太郎'); e.birthYmd = '1985-05-15';
+    A.state.employees = [e];
+    A.state.open = A.state.open || {}; A.state.open[e.id] = true;   /* 札を 開いた 姿 */
+    A.state.open['D' + e.id] = true;              /* 「詳細設定」も 開いた 姿 */
+    A.state.open['DS' + e.id + 'teate'] = true;   /* 中の「通勤・手当…」も 開いた 姿 */
+    A.renderEmpMaster();
+    const host = win.document.getElementById("emp-list");
+    ok(host && host.innerHTML.length > 500, '★従業員マスタが 描けていない★');
+    const f = Array.from(host.querySelectorAll('[data-f]')).map((x) => x.getAttribute('data-f'));
+    ok(f.indexOf('seibetsu') >= 0, '★性別の 欄が 無い★（資格取得届の「種別」に 要る）');
+    ok(f.indexOf('jushoKana') >= 0, '★住所（カナ）の 欄が 無い★（マイナンバーを 持たないので 要る）');
+    ok(f.indexOf('zip') >= 0 && f.indexOf('address') >= 0, '★郵便番号・住所の 欄が 無い★');
+    /* ★選ぶ物は 3つ（男性・女性・坑内員）＋「選んでください」★ */
+    const sel = host.querySelector('[data-f="seibetsu"]');
+    ok(sel && sel.tagName.toLowerCase() === 'select', '★性別が 選ぶ形に なっていない★');
+    eq(sel.querySelectorAll('option').length, 4, '★性別の 選択肢の 数★');
+  } finally { A.state.employees = mae; }
+});
+
+T('★資格取得届＝画面の 配線（出せる人だけ CSVに 入れる・足りない人は 名前を 挙げる）', () => {
+  const A = win.__PAYSLIP_TEST, TD = win.TodokedeCsv;
+  ok(A.shutokuCsvInput && A.shutokuCsvBox, '★画面の 口が 無い★');
+  const mae = A.state.employees, maeC = A.state.company;
+  try {
+    const a = A.defEmp('山田　太郎');
+    a.kana = 'ﾔﾏﾀﾞ ﾀﾛｳ'; a.birthYmd = '1985-05-15'; a.joinYmd = '2026-04-01';
+    a.seibetsu = 'male'; a.zip = '790-0001'; a.jushoKana = 'ｴﾋﾒｹﾝ ﾏﾂﾔﾏｼ 1-2-3';
+    a.address = '愛媛県松山市1-2-3'; a.base = '260000'; a.pref = 'ehime';
+    a.shaho = Object.assign({}, a.shaho, { mode: 'shutoku', mikomi: '260000' });   /* 入社時の 見込み報酬月額 */
+    if (a.shikyu && a.shikyu[0]) a.shikyu[0].value = '260000';
+    const b = A.defEmp('佐藤　花子');                       /* ★性別も 住所カナも 入れていない人★ */
+    b.kana = 'ｻﾄｳ ﾊﾅｺ'; b.birthYmd = '1990-01-20'; b.joinYmd = '2026-05-01';
+    b.base = '220000'; b.pref = 'ehime';
+    if (b.shikyu && b.shikyu[0]) b.shikyu[0].value = '220000';
+    A.state.employees = [a, b];
+    /* ★事業所の 中身は 門（checkHeader）が 見る物を ぜんぶ 入れる★
+       （2026-09-05＝画面が 門に 聞くように なったので、材料も 本物と 同じ形に する） */
+    A.state.company = Object.assign(A.defCompany(), { pref: 'ehime', seiriKigou: '01-ｱｲ', jigyoshoNo: '12345',
+      name: '株式会社テスト', addr: '愛媛県松山市1-2-3', nushi: '健保　良一', zip: '790-0001', tel: '089-123-4567' });
+    const rows = A.shikakuRows(A.state.employees).filter((x) => x.kind === '取得');
+    eq(rows.length, 2, '取得の 行が 2件 でない');
+    /* ★出せる／出せないは 実物の lib が 決める★（画面が 手で 決めない） */
+    const deru = rows.filter((x) => TD.dasuKaShutoku(A.shutokuCsvInput(x)));
+    eq(deru.length, 1, '★出せるのが ' + deru.length + '人★（住所カナ等が 揃った 1人 のはず）');
+    /* ★出せる人の 行は 公式の 検査を 1件も 出さずに 通る★ */
+    const kensa = win.TodokedeCheck.shutoku(TD.shutokuRow(A.shutokuCsvInput(deru[0])), '2026-09-05');
+    eq(kensa.length, 0, '出せる人なのに 赤が 出た: ' + JSON.stringify(kensa));
+    /* ★足りない人は 名前を 挙げて 知らせる★ */
+    const warn = rows.map((x) => TD.shutokuWarn(A.shutokuCsvInput(x)).join('／')).join('／');
+    ok(/佐藤/.test(warn), '★入れていない人の 名前を 出していない★');
+    ok(/住所（カナ）/.test(warn) && /性別/.test(warn), '★理由を 言っていない★');
+    ok(!/山田/.test(warn), '★出せる人まで 注意に 出している★');
+    /* ★画面の 箱★＝ボタンの 札に 人数が 出る */
+    const html = A.shutokuCsvBox(A.shikakuRows(A.state.employees));
+    ok(/b-shutoku-csv/.test(html), '★ボタンが 無い★');
+    ok(html.indexOf('CSVを作る（1人・SHFD0006.CSV）') >= 0, '★人数が 出ていない★');
+    ok(/佐藤/.test(html), '★入れていない人を 画面に 出していない★');
+  } finally { A.state.employees = mae; A.state.company = maeC; }
+});
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

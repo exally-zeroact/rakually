@@ -21,8 +21,15 @@ import { execSync } from 'node:child_process';
  *   例 YML=.github/workflows/webkit.yml SKIP="playwright install|npm install" */
 const YML = process.env.YML || '.github/workflows/ci.yml';
 const yml = fs.readFileSync(YML, 'utf8');
-const all = [...yml.matchAll(/^\s*run:\s*(.+)$/gm)].map((m) => m[1].trim())
-  .filter((c) => !/^npm install/.test(c));
+/* ★拾った 段★＝ci.yml の run: を 全部（★人が 数えた 本数では ない★）
+   ★2026-09-05 の 決まり（指示役 e9fdf1c）★
+     「押す前の『全部 緑』は ★CI と 同じ 物を 走らせて から★ 言う」
+     「出す形＝★拾った 段 ◯／走らせた ◯／赤 ◯／飛ばした ◯（理由つき）★」
+     「★1段も 走らなければ 赤★」（★0段 走って 緑★を 塞ぐ）
+   ★Exally が 1日で 2回 踏んだ★＝「全部」の 中身が 人と 機械で ちがった */
+const hirotta = [...yml.matchAll(/^\s*run:\s*(.+)$/gm)].map((m) => m[1].trim());
+const all = hirotta.filter((c) => !/^npm install/.test(c));
+const nozoita = hirotta.length - all.length;   /* 支度（npm install）＝走らせない */
 const from = Number(process.env.FROM || 1);
 const to = Number(process.env.TO || all.length);
 const skip = process.env.SKIP ? new RegExp(process.env.SKIP) : null;
@@ -36,7 +43,19 @@ for (let i = from; i <= Math.min(to, all.length); i++) {
   n++;
   let out = '';
   try { out = String(execSync(c, { stdio: 'pipe', encoding: 'utf8', timeout: 300000 }) || ''); }
-  catch (e) { red.push('#' + i + ' ' + c); out = ((e.stdout || '') + (e.stderr || '')); }
+  catch (e) {
+    red.push('#' + i + ' ' + c);
+    out = ((e.stdout || '') + (e.stderr || ''));
+    /* ★赤の 中身は 次の回で 上書きされる★＝★出た その場で 控えを 取る★
+       （2026-09-05 実測＝ブラウザを 使う 見張りが 回ごとに ちがう 1本だけ 赤になる。
+         走らせ直すと 緑＝★推理を 先に 語らない・まず 記録係を 置く★） */
+    try {
+      fs.mkdirSync('.sweep-red', { recursive: true });
+      const NL = String.fromCharCode(10);
+      fs.writeFileSync('.sweep-red/' + String(i) + '.txt',
+        '# ' + c + NL + '# ' + new Date().toISOString() + NL + NL + out, 'utf8');
+    } catch (_) { console.log('  🟡 赤の控えが 書けません'); }
+  }
   /* ★字で拾っている事を 隠さない★＝拾った行を そのまま 見せる。
      実測 2026-09-02 … 11本のうち 5本は ★『未測定 0件』と書いてある行★＝中身は 0だった */
   if (/未測定/.test(out)) {
@@ -49,9 +68,12 @@ for (let i = from; i <= Math.min(to, all.length); i++) {
 }
 console.log('\n[clock-sweep] ' + YML + ' ／ 時計 ' + (process.env.FAKE_NOW || process.env.DK_FAKE_NOW || '★本物★')
   + '  （' + YML.split('/').pop() + ' #' + from + '〜#' + Math.min(to, all.length) + '／全 ' + all.length + '本）');
-console.log('  走らせた ' + n + '本 ／ ★赤 ' + red.length + '本★ ／ ★未測定と出た ' + mihakari.length + '本★'
-  + (skipped.length ? ' ／ ★外した ' + skipped.length + '本★' : ''));
-red.forEach((x) => console.log('  ★赤★ ' + x));
+/* ★1段も 走らなければ 赤★（★0段 走って 緑★を 塞ぐ＝2026-09-05 の 決まり） */
+if (n === 0) { console.log('  ★赤★ 1段も 走っていません（拾った 段 ' + hirotta.length + '）'); process.exit(1); }
+console.log('  ★拾った 段 ' + hirotta.length + '★ ／ 走らせた ' + n + '本 ／ ★赤 ' + red.length + '本★ ／ ★未測定と出た ' + mihakari.length + '本★'
+  + ' ／ 飛ばした ' + (nozoita + skipped.length) + '本'
+  + '（支度 ' + nozoita + '＝npm install' + (skipped.length ? '／SKIP ' + skipped.length : '') + '）');
+red.forEach((x) => console.log('  ★赤★ ' + x + '  … 中身の控え .sweep-red/' + x.slice(1).split(' ')[0] + '.txt'));
 mihakari.forEach((x) => console.log('  🟡未測定と出た（0件ではない） ' + x));
 skipped.forEach((x) => console.log('  — 外した ' + x));
 
