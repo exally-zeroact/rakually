@@ -62,6 +62,18 @@
          ROW_H が ★一度も効いていなかった★。だから余白と行間も ここで決める。 */
   /* ★罫の太さは1か所★（濃さは THEME.line）＝紙の中に太さの違う線を作らない */
   var HAIR = '0.5pt';
+  /* ★締めの 線★＝「項目の合計」「中計」「合計」「請求額（差引請求額）」の 上の 1本。
+     ★2026-09-09 司さん「③は 中計の上の線だけ 濃いくなってるのを、
+       項目の合計と 下の請求額ってとこの 上の線も 濃いくして 統一感だせよ」★
+     ★実測（絵の 画素を 数えた／A4の 2倍の 絵）★
+       項目の合計の上 2px ／ ★中計の上 4px★ ／ 合計の上 2px ／ 請求額の上 2px
+       ＝中計だけ 濃かったのは ★別の 表（.ded と .bsum）で 線が 2本 重なっていた★から
+         （わざとでは ない。ほかは border-collapse で 1本に なる）。
+     ⇒ ★濃い方に そろえる★＝4本とも この太さ。重なりは 下の .ded で 止める。
+     ★太さは 1pt では 変わらない★（実測 2026-09-09）＝1pt=1.33px は ブラウザ が
+       0.5pt と 同じ 1CSSpx に 丸めるので ★絵が 1ドットも 変わらなかった★。
+       司さんが 見ていた「濃い 中計」は ★2CSSpx（絵の 上で 4px）★＝1.5pt。 */
+  var RULE_SUM = '1.5pt';
   /* ★表の外側の余白は1つ★（司さん 2026-08-16「左揃えか中央か右かきっちりやれ」）
      明細・締め・控除・（内訳）で バラバラ（1.2mm と 3mm）だったので、
      ★数字の右端が表ごとに違う位置★に来ていた。ここで1つに決める。 */
@@ -104,8 +116,22 @@
        黒田空調/ENEOS ＝ 30行 ／ ★八木（控除あり）＝ 3行★（控除枠は4行）
        実物が30行 入るのは頭が小さいから。うちは 21行まで来た（差は
        「ご請求金額を大きく」「振込先を枠で囲う」＝★うちが決めて残した所★）。 */
-  var PAPER_ROWS = 18;        // 控除を出さない紙（★実測＝物理の上限★）
-  var PAPER_ROWS_DED = 8;    // 控除を出す紙（★実測＝物理の上限★）
+  /* ★2026-09-08 どちらも 1行 減らした★
+     ＝表の 一番下に ★「項目の合計」の 1行を 足した★ので、
+       明細に 使える 行が その分 減る（司さん「控除なしのやつって言わんかったか」）。
+     ★足したのに 減らさなかったら A4を 超えた★（実測）：
+       CI(Linux) … 1124px＝★A4を 1px 超えた★
+       手元(WebKit/Windows) … 1145px＝★22px 超えた★（字幅が 違うので 数も 違う）
+     ★.sheet は overflow:hidden＝黙って 切れる★ので、超えたら 字が 消える。 */
+  /* ★2026-09-08（同じ日の 2回目）もう 1行 減らした★
+     ＝控除が 無い 紙にも ★3つ目の 帯（ご請求金額｜金額）★を 出したので、
+       足元が また 1行ぶん 高く なった。
+     ★測ってから 減らした★＝減らす前に 出したら 1142px（A4 1122.5px を 19px 超え）。 */
+  var PAPER_ROWS = 18;        /* ★控除を出さない紙★（★実測＝物理の上限は 19・1行の 余裕を 取って 18★）
+     ★2026-09-08 の 道すじ★ 18 →（合計行を 足す）17 →（帯を 足す）16
+       →（★足元の 備考の箱を 消した★＝司さんの 実物で 備考は 明細の 列と 分かった）★18★
+     ★実測（WebKit・A4 1122.5px）★ 18行 緑／19行 緑／★20行で 1146px＝23px 超え★ */
+  var PAPER_ROWS_DED = 7;     /* ★控除を出す紙★（合計行の分 8→7・帯は 前から 在る） */
   var DEDUCT_ROWS = 4;        // 控除の枠 ★会社が変えられる★（実物 八木＝E17:H20＝4行）
   var ROWS_FIRST = 12;
   var ROWS_REST = 24;
@@ -349,6 +375,14 @@
     if (st.memoBox !== undefined && st.memoBox !== null) return !!st.memoBox;
     return false;
   }
+  /* ★★「すきま自動」は 消しました★★（2026-09-09）
+     司さん「★項目入力行や 控除入力行は なんもなくても デフォで 何行って 決めてないか？
+       それ以上 増えた時だけ A4に 収まるような 増やせって 設定したど★」
+     ＝★空行を 出さない のは この 決めに 反する★。
+     ★今の 動き（2026-09-09 実測）★
+       既定の 枠 … 控除なし 18行／控除あり 7行（なんも 無くても この行数）
+       明細 18件までは 1枚・★19件目から 2枚目に 増える★（A4に 収まる 範囲で）
+     ⇒ 決めは もう 効いている。様式 slim（すきま自動）も 消した。 */
   function frameRowsOf(inv, o) {
     o = o || {};
     var given = (o.paperRows !== undefined ? o.paperRows : (inv && inv.data && inv.data.paperRows));
@@ -864,12 +898,23 @@
          ★数は 1円も 変えない★＝ここは 今までどおり tax.subtotal（税抜）。 */
       rows.push(['', allPfx + '小計' + (inclusive ? '（税抜）' : ''), yen(tax.subtotal)]);
       rows.push(['', allPfx + taxLabel(tax, inv.tax_mode), yen(tax.taxTotal)]);
-      rows.push(['sums-mid', '合計', yen(tax.grandTotal)]);
+      /* ★控除を 引く 紙では ここは「中計」★（2026-09-09 司さん
+         「2個目の赤丸の 合計は ★中計★」）
+         ＝下に 控除を 引いた ★合計★が 来るので、ここは まだ 途中の 計。
+         ★控除が 無い 紙は 今までどおり「合計」★（引く物が 無い＝ここが 最後）。 */
+      rows.push(['sums-mid', (showDeduct && (deduct === null || Number(deduct) !== 0)) ? '中計' : '合計',
+        yen(tax.grandTotal)]);
       var hasRealDeduct = showDeduct && (deduct === null || Number(deduct) !== 0);
       if (hasRealDeduct) {
         var billedNet = (deduct === null) ? null : (tax.grandTotal - deduct);
         rows.push(['sums-minus', '控除', (deduct === null) ? '（未確認）' : yen(deduct)]);
-        rows.push(['', '請求額', (billedNet === null ? '（未確認）' : yen(billedNet))]);
+        /* ★いちばん下は「合計」★（2026-09-09 司さん
+           「3個目の赤丸の 差引請求額は ★合計★の方が えんやないか？」）
+           ＝上から 小計 → 消費税 → 中計 → 控除 → ★合計★ と 下りて 終わる。
+             ③の 帯の 見出し（差引請求額）は ★この 塊の 名前★で、
+             ここは ★その 塊の いちばん下の 数★＝役目が 違う。 */
+        rows.push(['', textOf(TH.finalLabel) || '合計',
+          (billedNet === null ? '（未確認）' : yen(billedNet))]);
       }
       if (gen && gen.on) {
         var pay = DOC.payableOf(tax, carry, gen, deduct);
@@ -879,6 +924,16 @@
       rows[rows.length - 1][0] = 'sums-net';
       return rows;
     }
+    /* ★締めの 帯の 呼び名は ここ 1か所★（2026-09-09）
+       ＝③の 帯（見出し）と いちばん下の 行が ★同じ 字★に なる。
+       会社が 変えたい時は inv.data.sumsHeadLabel か o.sumsHeadLabel。
+       ★引く物が 無い 紙は 別の 呼び名★（sumsHeadPlain＝合計金額）
+         ＝控除が 無いのに「差引」と 書かない。 */
+    function sumsHeadOf() {
+      return textOf((inv.data && inv.data.sumsHeadLabel) || o.sumsHeadLabel
+        || (showDeduct ? TH.sumsHead : TH.sumsHeadPlain));
+    }
+
     /* 締めの一番 下の行＝★この紙で実際に払う額★（字のまま返す＝「（未確認）」もそのまま） */
     function payTextOf() {
       var r = sumsRows();
@@ -889,9 +944,25 @@
       /* ★締め★ 明細の合計 → 消費税 → 合計 →（控除）→ 請求額。
          ★大きい数字は紙の頭に1つだけ★なので ここは全部 小さく、
          ★一番 下の行（＝実際に払う額）だけ 線と太さで強く★する。 */
-      return '<table class="sums"><tbody>' + sumsRows().map(function (r) {
+      var tbl = '<table class="sums"><tbody>' + sumsRows().map(function (r) {
         return '<tr' + (r[0] ? ' class="' + r[0] + '"' : '') + '><th>' + r[1] + '</th><td>' + r[2] + '</td></tr>';
       }).join('') + '</tbody></table>';
+
+      /* ★2026-09-08 司さん「3番目の青線の所に なんの塊か 上の2つと 分かるように 何が作れや」★
+         ★2026-09-08（同じ日の 2回目）司さん「項目とか内容みたいに 緑の枠つくれよ」★
+         ＝①の「項目｜金額」・②の「内容｜金額」は ★薄い緑の 帯★の 見出し行。
+           ③だけ 字だけの 見出しだったので ★同じ 帯★に そろえる。
+         ★見た目は 作らない★＝②の 帯（.ded-hd）と ★1文字も 違わない 値★を 使う。
+         ★控除を 出さない紙は 塊が 1つ★なので 見出しは 出さない（要らない物を 増やさない）。 */
+      /* ★控除が 無い 紙にも 帯を 出す★（2026-09-08 司さん
+         「この赤の線にも 控除ありの時のように 分かりやすくやって」）
+         ★呼び名は 控除の 有無で 変える★＝引く物が 無いのに「差引」と 書かない。 */
+      var sHead = sumsHeadOf();
+      if (!sHead) return tbl;
+      /* ★右は「金額」★＝①②の 帯と 同じ 言葉（3つとも 同じ 読み方に なる） */
+      var hd = '<thead><tr class="sums-hd"><th>' + esc(sHead) + '</th><td>金額</td></tr></thead>';
+      return '<table class="sums">' + hd
+        + tbl.replace('<table class="sums">', '').replace(/<\/table>$/, '') + '</table>';
     }
 
     /* ── 繰越（前回の残り）★紙の頭・箱で囲まない★
@@ -1000,6 +1071,16 @@
         return (i === 0) ? t : '<span class="bank-nm">' + t + '</span>';
       }).join('<br>');
     }
+    /* ★★足元の「備考の箱」は 消しました★★（2026-09-08）
+       ★司さんが 実物を 見せてくれて 私の 読み違いが 分かった★
+       「おれの備考欄は 消費税の横にもって来て 現場名とか 書いてないか？」の
+       ★「消費税の横」＝明細表の 消費税の列の 右隣の 列★（＝行ごとに 現場名を 書く）。
+       私は「締めの 横」と 読み違えて 足元に 箱を 作っていた。
+       ★2026-09-05 の「デフォで 備考欄つけとけよ」も この列の 話だった★。
+       ⇒ ★備考は 明細の 列★（seikyu-cols.js に 前から 在る＝役目 'memo'／
+         「備考」「摘要」や 会社が 決めた 列名でも spec.roles で 割り当てられる）。
+       ⇒ 足元の 箱は ★実物に 無い★ので 出さない。 */
+
     function footerBlock() {
       var left = '';
       /* ★納品書には お振込先を 出さない★（払えの紙ではない＝二重請求に見える） */
@@ -1008,17 +1089,15 @@
          枠で囲って薄く塗る（★白黒コピーでも枠は残る濃さ★）。 */
       if (bank) left += '<div class="note note-bank"><div class="note-h">お振込先</div>'
         + '<div class="note-b note-bb">' + bankHtml(bank) + '</div></div>';
+      /* ★書いた 備考は そのまま 出す★（2026-09-08）
+         ★空の 箱は 出さない★＝司さん「おれの備考欄は 消費税の横にもって来て
+         現場名とか 書いてないか？」＝★行ごとの 備考は 明細の 列★（消費税の 右隣）。
+         ★ここは 紙 全体の 備考★（1通に 1つ・お客さんが 書いた 時だけ 出す）。
+         ★2026-09-08 に 一度 これも 消して しまった★＝納品書の 備考が 紙から 落ちて
+         delivery.test.mjs が 捕まえた。★空の箱を 消すのと 書いた物を 消すのは 別★。 */
       var memo = textOf(inv.data && inv.data.memo);
-      /* ★備考の枠は 中身が 無くても 出す★（司さん 2026-09-05
-           「他2つは おれの様式のように デフォで 備考欄つけとけよ」）
-         ＝司さんの 実物の 請求書には ★空でも 備考の枠が 刷ってある★（手で 書き足す為）。
-         ★出すか どうかは 様式が 決める★（theme.memoBox）＝控除の紙(koujo)は 実物11通とも
-         備考の枠が 無いので 出さない。会社が 切りたい時は o.memoBox=false。
-         ★行数（PAPER_ROWS）は この枠を 入れて 測り直す★（下の 実測の 覚え書き）。 */
-      var memoBox = memoBoxOf(inv, o);      /* ★行数の 計算と 同じ 1か所★ */
-      if (memo) left += '<div class="note"><div class="note-h">備考</div><div class="note-b">' + esc(memo).replace(/\n/g, '<br>') + '</div></div>';
-      else if (memoBox && !isDelivery) left += '<div class="note note-memo"><div class="note-h">備考</div>'
-        + '<div class="note-b note-mb"></div></div>';
+      if (memo) left += '<div class="note"><div class="note-h">備考</div><div class="note-b">'
+        + esc(memo).split(String.fromCharCode(10)).join('<br>') + '</div></div>';
       var right = breakdownBlock();
       /* ★（内訳）が無い時は 右のマスごと出さない★＝振込先が幅いっぱい使える
          （空のマスを残すと 左が狭いままで、長い銀行名が折り返す） */
@@ -1147,6 +1226,14 @@
                という紙が出る（★実測 2026-08-17・936通り中 204通り★）。
                1枚物だけ tax.subtotal を使っていたので、★1枚物ほど狂っていた★。 */
           var footLabel = (last && !multi) ? '小計' : 'このページの小計';   /* ★実物に 合わせた（2026-09-03）★ */
+          /* ★「項目の合計」は 控除の 有無に かかわらず 出す★
+             （2026-09-08 司さん「赤丸の所に項目の合計は？」
+               → 同じ日「は？控除なしのやつって言わんかったか？」）
+             ★前は 控除ありの 紙にしか 出していなかった★＝控除なしの 普通の 紙は
+               表の下に 何も 無く、空行の あと いきなり「小計」だった（実測・絵で 見た）。
+             下の 締めの「小計」と ★同じ数★でも 役目が 違う＝
+             ここは ★①の 塊の 合計★（控除ありの 紙の「中計」と 同じ役目）。 */
+          if (last && !multi) footLabel = textOf(TH.itemSum) || '項目の合計';
           /* ★税込で打つ紙は「（税込）」と書く★
              ＝締めの「明細の合計」は税抜なので、★同じ言葉で違う数★にしない。 */
           if (inclusive) footLabel += '（税込）';
@@ -1157,7 +1244,13 @@
              ★数字は 1つも 消えない★＝列の縦計と 同じ額を 締めが 持っている（この試験で 数を見る）。
              ★複数ページは そのまま★＝各ページの「このページの小計」は ★実物にも 在る形★
              （ENEOS 25.12＝2ページの紙は ページごとに 足元が 出ていた）。 */
-          var dropFoot = (last && !multi);
+          /* ★表の 合計行は いつも 出す★（2026-09-08 司さん
+             「他のテンプレもできることはやって見せて（項目の合計など）」
+             →「は？控除なしのやつって言わんかったか？」）
+             ★前は 1枚物で 消していた★＝同じ「小計」が 表と 締めの 2か所に 出ていた為。
+             ⇒ ★言葉を 分けたので もう 重ならない★（表＝項目の合計／締め＝小計）。
+             ★複数ページは 今までどおり★「このページの小計」（実物にも 在る形）。 */
+          var dropFoot = false;
           var foot = dropFoot ? '' : itemsFootHtml(pageLines, footLabel, pageSub, pageTax);
           /* ★明細の上に「件名」の行を出さない★（司さん 2026-08-16）
              紙の頭に「2026年6月分」と書いてあるのに、その下に「7月分 工事代金」と出ていて
@@ -1394,14 +1487,14 @@
          給料明細の「支給合計」と同じ役目だが、★列がある表では 表の中に置く★。 */
       /* ★見出しの地色を引き継がない★（th なので .items th の薄い地が乗って、
          合計行の左半分だけ塗られて見えた＝2026-08-15 スクショで発見） */
-      '.items tfoot .r-sum th,.items tfoot .r-sum td{background:transparent;border-top:' + HAIR + ' solid ' + LINE + ';',
+      '.items tfoot .r-sum th,.items tfoot .r-sum td{background:transparent;border-top:' + RULE_SUM + ' solid ' + LINE + ';',
       'border-bottom:0;padding:' + ROW_PAD + ';line-height:' + ROW_LH + ';font-weight:700;color:' + INK + ';}',
       '.items tfoot .r-sum td{' + "font-family:'DM Mono',ui-monospace,monospace;}",
       '.c-sumlabel{text-align:left;white-space:nowrap;}',
       '.bsum{width:100%;border-collapse:collapse;font-size:9.5pt;margin:0;}',
-      '.bsum th{text-align:left;font-weight:700;color:' + INK + ';border:0;border-top:' + HAIR + ' solid ' + LINE + ';',
+      '.bsum th{text-align:left;font-weight:700;color:' + INK + ';border:0;border-top:' + RULE_SUM + ' solid ' + LINE + ';',
       'padding:1.8mm ' + EDGE + ';white-space:nowrap;}',
-      '.bsum td{text-align:right;font-weight:700;color:' + INK + ';border:0;border-top:' + HAIR + ' solid ' + LINE + ';',
+      '.bsum td{text-align:right;font-weight:700;color:' + INK + ';border:0;border-top:' + RULE_SUM + ' solid ' + LINE + ';',
       'padding:1.8mm ' + EDGE + ';white-space:nowrap;' + "font-family:'DM Mono',ui-monospace,monospace;}",
 
       /* ★② 差し引く（控除）★ ★行の高さは明細と同じ★（左右の罫線をそろえる） */
@@ -1417,6 +1510,23 @@
       'font-size:8.5pt;border:0;padding:' + ROW_PAD + ';line-height:1.35;height:auto;}',
       '.ded-hd td{text-align:right;font-family:inherit;}',
       '.ded .r-blank th,.ded .r-blank td{color:transparent;}',
+      /* ★線を 2本 重ねない★＝控除の表の 最後の行の 下罫を 止める
+         （すぐ下の .bsum が 自分で 上罫を 引く。重なると そこだけ 濃くなる）。 */
+      '.ded tbody tr:last-child th,.ded tbody tr:last-child td{border-bottom:0;}',
+      /* ★3つ目の 塊の 帯★（2026-09-08 司さん「項目とか内容みたいに 緑の枠つくれよ」）
+         ★.ded-hd と 1文字も 違わない★＝新しい 見た目を 作らない。
+         別の 名前に するのは ★.sums th の 字の色が 後から 上書きして しまう★為
+         （どちらも 詳細度が 同じで、後に 書いた .sums th が 勝つ）。 */
+      /* ★.sums th より 強く 書く★（2026-09-08 絵を 見て 分かった）
+         同じ 強さ（0,1,1）だと ★後に 書いてある .sums th の 薄い字が 勝つ★＝
+         ③の 帯だけ 字が 薄く 見えた（①②は 濃い黒）。
+         ⇒ .sums を 前に 足して 強さを 上げる（値は .ded-hd と 同じまま）。 */
+      /* ★締めの 見出しの 地★＝様式が 別に 決めていれば そちら（TH.sumsBg）。
+         2026-09-09 司さん「なんで②だけ 下の合計金額のタブに 背景いれて 合わせてないんど」
+         ＝地を 使わない 様式（elegant）では ★ここだけ 帯が 抜けて 見えた★。 */
+      '.sums .sums-hd th,.sums .sums-hd td{background:' + (TH.sumsBg || TH.headBg) + ';color:' + TH.headInk + ';font-weight:700;',
+      'font-size:8.5pt;border:0;padding:' + ROW_PAD + ';line-height:1.35;height:auto;}',
+      '.sums .sums-hd td{text-align:right;font-family:inherit;}',
 
       '.foot{width:100%;border-collapse:collapse;table-layout:auto;margin:0;}',
       '.foot td{vertical-align:top;padding:0;}',
@@ -1441,11 +1551,11 @@
       /* ★途中の「合計」は途中★＝細い線だけ。ここを太くすると
          「合計＝太字／請求額＝細字」になり、★払う額の方が弱く見える★
          （2026-08-15 実物のスクショで見つけた。給料明細も最後の行が主役）。 */
-      '.sums-mid th,.sums-mid td{border-top:' + HAIR + ' solid ' + LINE + ';color:' + INK + ';}',
+      '.sums-mid th,.sums-mid td{border-top:' + RULE_SUM + ' solid ' + LINE + ';color:' + INK + ';}',
       /* 締めの中の枝（本文より少し小さく・罫は引かない） */
       '.sums-sub th,.sums-sub td{color:' + SUB + ';font-size:9pt;}',
       /* ★締めの最後の1行＝実際に払う額★ 大きさは変えず、線と太さで一番 強くする。 */
-      '.sums-net th,.sums-net td{border-top:' + HAIR + ' solid ' + LINE + ';font-weight:700;color:' + INK + ';}',
+      '.sums-net th,.sums-net td{border-top:' + RULE_SUM + ' solid ' + LINE + ';font-weight:700;color:' + INK + ';}',
       '.sums-net td{color:' + TH.grandInk + ';}',
 
       /* （内訳）★枠で囲まない★ */
@@ -1504,13 +1614,15 @@
 
       /* 箱の中の字は 中身なりの幅（★最低幅は残す＝1文字ずつ縦に割れない★）
          ※ .note-b とは別のクラスにしている＝「.note-b の決まり」を検査する所と混ざらないため */
-      /* ★振込先の高さは いつも同じ★（司さん 2026-08-16 の並びの統一と同じ考え）
-         名義が長くて2行になる会社と 1行の会社で ★足元の高さが変わると 載る行数も変わる★
-         （実測 2026-08-16：長い名義で +24px＝1行ぶん はみ出した）。
-         ＝★2行ぶんの高さを最初から取る★＝どの会社でも 紙の顔が同じ・行数も同じ。 */
-      '.note-bb{width:auto;min-width:22mm;min-height:83px;}',
-      /* ★空の 備考の枠★＝手で 書き足せる 広さ（2行ぶん）。罫は 振込先と 同じ濃さ。 */
-      '.note-mb{min-height:40px;}',
+      /* ★振込先の 箱は 口座の 数なりの 高さ★（2026-09-08 司さん
+         「振込先の数に合わせて 背景の枠の高さを 自動で調整するべきでは？」）
+         ★前は min-height:83px 固定★＝口座1つでも 2つでも 同じ高さで
+           ★口座1つの 紙は 下が 無駄に 空いていた★（実測 中身83px／3口座で ようやく 103px）。
+         ★元の 理由（2026-08-16）★は「名義が 長い会社と 短い会社で 足元の 高さが 変わると
+           載る行数も 変わる」。⇒ ★行数の 側で 面倒を 見る★（maxRowsOf の bankRows）ので
+           箱の 高さは 中身なりで よい。★1行ぶんだけ 最低を 残す★（1文字ずつ 縦に割れない為）。 */
+      '.note-bb{width:auto;min-width:22mm;min-height:24px;}',
+
       '.note-bank .note-h{color:' + TH.headInk + ';font-weight:700;}',
       /* 口座番号（続いた数字）だけ 大きく等幅＝読み間違いを減らす */
       /* 名義は次の行（★毎回おなじ形★＝中途半端な所で折れない） */
