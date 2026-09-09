@@ -446,22 +446,41 @@ await TA('2. ★発行すると固まる（写しが入り、状態が発行済�
   eq(row.totals.grandTotal, 346);
 });
 
-await TA('2. ★発行済みは直せない・もう一度発行できない（理由も出る）', async () => {
-  ok($('e-partner').disabled, '取引先が直せる');
-  ok($('e-no').disabled, '番号が直せる');
-  ok(qa('#lines-body input').every((i) => i.disabled), '明細が直せる');
-  // ★押せない物は「出さない」（説明で補わない）
-  eq($('b-save').style.display, 'none', '発行済みなのに保存が出ている');
-  eq($('b-issue').style.display, 'none', '発行済みなのに発行が出ている');
+await TA('2. ★発行済みでも いつでも 直せる／発行するは もう 出ない', async () => {
+  /* ★2026-09-09 決めが 変わった★（司さん
+       「発行とゆう概念が めんどくさい／★代行請求書のように いつでも編集できるように★するのと
+         ★請求日を いつでも 触れるように★するのと」
+       ＋「一覧から 取り消して 入力画面はいると ★何も触れない★」）
+     ★代行請求の 実物★＝請求書に 状態の 列が 無く、過去月でも PDFを 出した後でも
+       ★何のブロックも 無く 直せる★。
+     ⇒ 欄を 塞ぐのを やめた。★守る物は 番号だけ★（一度 決めたら 動かさない）。 */
+  ok(!$('e-partner').disabled, '★発行済みで 取引先が 直せない★');
+  ok(!$('e-no').disabled, '★発行済みで 番号が 直せない★');
+  ok(!$('e-issue').disabled, '★発行済みで 請求日が 直せない★（司さんの 名指し）');
+  ok(qa('#lines-body input').every((i) => !i.disabled), '★発行済みで 明細が 直せない★');
+  /* ★「発行する」は 番号を 付ける 1回きり★＝付いた後に 出すと 二度押しに なる */
+  eq($('b-issue').style.display, 'none', '★発行済みなのに「発行する」が 出ている★');
+  ok($('b-save').style.display !== 'none', '★直せるのに「保存」が 出ていない★');
+  ok(!$('edit-locked'), '★「直せません」の 札が まだ 在る★');
   ok(!$('b-delete'), '発行済みなのに削除が出ている');
   ok($('b-void'), '取り消しが出ていない');
-  ok(/発行済み/.test($('act-why').textContent), '理由が出ていない: ' + $('act-why').textContent);
-  /* ★畳みの見出しが、中に無い物を並べていない（発行済みに「下書き」と書かない）★
-     ＋ 発行済みはここが唯一の出来る事なので、畳んだままにしない */
-  eq(/下書き/.test($('out-sum').textContent), false, '発行済みなのに見出しが「下書き」と言っている: ' + $('out-sum').textContent);
   ok(/取り消し/.test($('out-sum').textContent), '見出しに「取り消し」が無い: ' + $('out-sum').textContent);
-  eq($('out-box').open, true, '発行済みなのに出来る事が畳まれたまま');
-  ok($('edit-locked').style.display !== 'none', '発行済みの断り書きが出ていない');
+});
+
+/* ★取り消し済みでも 触れる★（司さん「一覧から 取り消して 入力画面はいると 何も触れない」） */
+await TA('2-a. ★取り消し済みでも 中身が 触れる', async () => {
+  const st = win.SeikyuApp._state;
+  const mae = st.cur.status;
+  st.cur.status = 'void';
+  win.SeikyuApp._fillEdit();
+  await sleep(20);
+  ok(!$('e-partner').disabled, '★取り消し済みで 取引先が 触れない★');
+  ok(!$('e-issue').disabled, '★取り消し済みで 請求日が 触れない★');
+  ok(qa('#lines-body input').every((i) => !i.disabled), '★取り消し済みで 明細が 触れない★');
+  eq($('b-issue').style.display, 'none', '★取り消し済みに「発行する」が 出ている★');
+  st.cur.status = mae;
+  win.SeikyuApp._fillEdit();
+  await sleep(20);
 });
 
 /* ═══ 2-b. ★どんな項目にも対応できる（列を自分で決める）★ ═══ */
@@ -1145,19 +1164,22 @@ await TA('9-d. ★①「前回から当てる」が源泉ありでも壊れな�
   let taps2 = 0;
   setVal('e-partner', 'pt_g'); taps2++;
   await sleep(60);
-  ok(win.getComputedStyle($('guess-card')).display !== 'none', '「前回と同じで作りますか？」が出ていない');
-  ok(/源泉徴収/.test($('guess-list').textContent), '当てた中身に源泉が出ていない: ' + $('guess-list').textContent);
-
-  $('b-guess-ok').click(); taps2++;
-  await sleep(40);
-  eq($('e-gensen').checked, true, '✓ を押したのに源泉が入っていない');
+  /* ★2026-09-09 司さん「前回と同じで作りますか？は いらない」★
+     ＝問いの 箱も ボタンも 消えた。★聞かずに 引き継ぐ★ので
+       ★取引先を 選んだ その場で もう 入っている★（押す回数が 1回 減る）。
+     引き継いだ事は 入力の 知らせ（edit-ok）に 1行 出る＝黙っては やらない。 */
+  ok(!doc.getElementById('guess-card'), '★問いの 箱が まだ 在る★');
+  ok(/前回/.test($('edit-ok').textContent), '★何を 引き継いだかを 言っていない★: ' + $('edit-ok').textContent);
+  ok(/源泉徴収/.test($('edit-ok').textContent), '★源泉を 引き継いだと 言っていない★: ' + $('edit-ok').textContent);
+  eq($('e-gensen').checked, true, '★聞かずに 引き継いだのに 源泉が 入っていない★');
   ok(win.getComputedStyle($('tag-gensen')).display !== 'none', '「前回から」の印が源泉に付いていない');
   setF('name', '原稿料 10月分'); setF('amount', '150000');
   await sleep(30);
   $('b-issue').click(); taps2++;
   await sleep(80);
   eq(st.cur.status, 'issued', '2通目が発行できていない: ' + $('edit-err').textContent);
-  eq(taps2, 3, '★2通目の押す回数が3回を超えた（取引先・✓・発行）★: ' + taps2);
+  eq(taps2, 2, '★2通目の押す回数が2回を超えた（取引先・発行）★＝'
+    + '問いを やめたので ✓ の 1回が 減る: ' + taps2);
   eq(st.cur.snapshot.gensen.amount, CHOSHO.gensenA(150000), '2通目の源泉が違う');
 });
 
@@ -1194,11 +1216,10 @@ await TA('9-f. ★「前回と同じ」で源泉を消さない（振り込ま�
   $('b-new').click(); await sleep(20);
   setVal('e-partner', 'pt_h'); await sleep(60);
   eq($('e-gensen').checked, true, '取引先の既定で源泉が入っていない');
-  ok(/源泉徴収/.test($('guess-list').textContent),
-    '★押したらどうなるかを言っていない（前回に無い物は黙って変わる）★: ' + $('guess-list').textContent);
-
-  $('b-guess-ok').click(); await sleep(40);
-  eq($('e-gensen').checked, true, '★✓ を押したら源泉が消えた（振込額が黙って変わる）★');
+  ok(/源泉徴収/.test($('edit-ok').textContent),
+    '★どうなったかを言っていない（前回に無い物が 黙って 変わる）★: ' + $('edit-ok').textContent);
+  await sleep(40);
+  eq($('e-gensen').checked, true, '★引き継いだら 源泉が 消えた（振込額が 黙って 変わる）★');
   eq(!!st.cur.data.gensen, true, '中の値も消えている');
 
   setF('name', '10月分'); setF('amount', '100000');
@@ -1267,7 +1288,7 @@ async function issueOne(partnerId, ymd, amount, name) {
   doc.querySelector('.bn[data-scr="scr-list"]').click(); await sleep(10);
   $('b-new').click(); await sleep(20);
   setVal('e-partner', partnerId); await sleep(60);
-  if (win.getComputedStyle($('guess-card')).display !== 'none') { $('b-guess-edit').click(); await sleep(20); }
+  /* ★問いの 箱は 消えた★（2026-09-09）＝押す物が 無い */
   setVal('e-issue', ymd); await sleep(40);
   const tr = doc.querySelector('#lines-body tr');
   const setF = (k, v) => { const e = tr.querySelector('[data-f="' + k + '"]'); e.value = v; e.dispatchEvent(new win.Event('input')); e.dispatchEvent(new win.Event('change')); };
@@ -1518,7 +1539,7 @@ await TA('12-b. ★見積を1通 出せる（番号は請求と別の系列＝�
   $('b-new').click(); await sleep(30);
   eq(st.cur.doc_type, 'quote', '★見積を選んでいるのに請求書を作っている★');
   setVal('e-partner', 'pt_q'); await sleep(60);
-  if (win.getComputedStyle($('guess-card')).display !== 'none') { $('b-guess-edit').click(); await sleep(20); }
+  /* ★問いの 箱は 消えた★（2026-09-09）＝押す物が 無い */
   setVal('e-issue', '2026-09-10'); await sleep(40);
   const tr = doc.querySelector('#lines-body tr');
   const setF = (k, v) => { const e = tr.querySelector('[data-f="' + k + '"]'); e.value = v; e.dispatchEvent(new win.Event('input')); e.dispatchEvent(new win.Event('change')); };
@@ -1655,7 +1676,7 @@ await TA('12-f. ★明細の並べ替え（▲▼）で 金額は1円も動か�
   doc.querySelector('.bn[data-scr="scr-list"]').click(); await sleep(10);
   $('b-new').click(); await sleep(30);
   setVal('e-partner', 'pt_q'); await sleep(60);
-  if (win.getComputedStyle($('guess-card')).display !== 'none') { $('b-guess-edit').click(); await sleep(20); }
+  /* ★問いの 箱は 消えた★（2026-09-09）＝押す物が 無い */
   const setRow = (i, name, amt) => {
     const tr = $('lines-body').querySelectorAll('tr')[i];
     const n = tr.querySelector('[data-f="name"]'), a = tr.querySelector('[data-f="amount"]');
@@ -1741,7 +1762,7 @@ async function newInvoiceFor(pid, ymd) {
   doc.querySelector('#kind-seg [data-kind="invoice"]').click(); await sleep(60);
   $('b-new').click(); await sleep(40);
   setVal('e-partner', pid); await sleep(80);
-  if (win.getComputedStyle($('guess-card')).display !== 'none') { $('b-guess-edit').click(); await sleep(30); }
+  /* ★問いの 箱は 消えた★（2026-09-09）＝押す物が 無い */
   setVal('e-issue', ymd); await sleep(60);
 }
 
@@ -1895,10 +1916,15 @@ await TA('13-h. ★控除の赤は 埋めた瞬間に消える（古い文を残
   await newInvoiceFor('pt_y', '2026-08-07');
   setLine(0, 'name', '工事代金'); setLine(0, 'amount', '100000');
   await sleep(80);
+  /* ★2026-09-09★ 前回の 控除が 自動で 入るように なったので（司さん
+     「項目や控除は 前のを 記憶して…」）、★足した行は 0番目とは 限らない★。
+     ⇒ 足した ★最後の行★ を 見る（この検査の 狙いは「埋めたら 赤が 消える」）。 */
   $('b-ded-add').click(); await sleep(60);
   // 足した直後は「名前が空です」＝正しい
   ok(/名前が空です/.test($('ded-err').textContent), '空の控除で赤が出ていない');
-  const dn = $('ded-list').querySelector('[data-dn="0"]'), da = $('ded-list').querySelector('[data-da="0"]');
+  const _dns = [...$('ded-list').querySelectorAll('[data-dn]')];
+  const _i = _dns.length - 1;
+  const dn = $('ded-list').querySelector('[data-dn="' + _i + '"]'), da = $('ded-list').querySelector('[data-da="' + _i + '"]');
   dn.value = '弁当代'; dn.dispatchEvent(new win.Event('input'));
   await sleep(60);
   ok(!/名前が空です/.test($('ded-err').textContent),
@@ -1943,6 +1969,9 @@ await TA('14-a. ★同じ数字を2回 言わない（税率が1つなら「◯%
 
 await TA('14-b. ★払う金額を1つだけ 一番 大きく（大きい数字が2つ並ばない）', async () => {
   await newInvoiceFor('pt_y', '2026-08-11');
+  /* ★2026-09-09★ 前回の 控除が 自動で 入るように なったので、
+     ★「控除が 無い時」を 見たいこの検査は 先に 空にする★（司さんの 直しの せいではない）。 */
+  win.SeikyuApp._state.cur.data.deductions = [];
   setLine(0, 'name', '工事代金'); setLine(0, 'qty', '140'); setLine(0, 'price', '1900');
   await sleep(100);
   // 控除が無い時＝一番 下は「合計」
@@ -1951,7 +1980,8 @@ await TA('14-b. ★払う金額を1つだけ 一番 大きく（大きい数字�
   ok(/合計/.test(big[0].textContent), '一番 大きいのが合計でない: ' + big[0].textContent);
   // 控除を足すと 一番 下は「請求額」になり、合計は小さくなる
   $('b-ded-add').click(); await sleep(40);
-  const dn = $('ded-list').querySelector('[data-dn="0"]'), da = $('ded-list').querySelector('[data-da="0"]');
+  const _j = [...$('ded-list').querySelectorAll('[data-dn]')].length - 1;
+  const dn = $('ded-list').querySelector('[data-dn="' + _j + '"]'), da = $('ded-list').querySelector('[data-da="' + _j + '"]');
   dn.value = '弁当代'; dn.dispatchEvent(new win.Event('input'));
   da.value = '11340'; da.dispatchEvent(new win.Event('input'));
   await sleep(120);
@@ -2176,10 +2206,14 @@ await TA('15-d2. ★設定は開いた時に見える数を減らす（既定で
 
 await TA('15-e. ★差し引く額が合計を超えたら 言う（止めないが黙らない）', async () => {
   await newInvoiceFor('pt_y', '2026-08-13');
+  /* ★2026-09-09★ 前回の 控除が 自動で 入るように なったので、
+     ★引く額を この検査で 決めたい★＝先に 空にしてから 1行だけ 足す。 */
+  win.SeikyuApp._state.cur.data.deductions = [];
   setLine(0, 'name', '工事代金'); setLine(0, 'amount', '1000');
   await sleep(90);
   $('b-ded-add').click(); await sleep(60);
-  const dn = $('ded-list').querySelector('[data-dn="0"]'), da = $('ded-list').querySelector('[data-da="0"]');
+  const _k = [...$('ded-list').querySelectorAll('[data-dn]')].length - 1;
+  const dn = $('ded-list').querySelector('[data-dn="' + _k + '"]'), da = $('ded-list').querySelector('[data-da="' + _k + '"]');
   dn.value = '前受金'; dn.dispatchEvent(new win.Event('input'));
   da.value = '5000'; da.dispatchEvent(new win.Event('input'));
   await sleep(90);

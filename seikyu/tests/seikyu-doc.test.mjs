@@ -96,8 +96,12 @@ if (process.argv.includes('--self-test')) {
     if (!name) throw new Error('空を返した＝取れなかったのに空欄になる');
   });
 
-  S('★発行済みを編集/削除できると赤', () => {
-    if (D.canEdit({ status: 'issued' })) throw new Error('発行済みが編集できてしまう');
+  S('★発行済みを 消せると 赤（番号を 欠番に しない）', () => {
+    /* ★2026-09-09 決めが 変わった★（司さん「代行請求書のように いつでも編集できるように」）
+       ＝★編集は いつでも できる★ので ここでは 見ない。
+       ★消す方は 変えていない★＝発行済みを 消すと 番号が 欠番に なる。 */
+    if (!D.canEdit({ status: 'issued' })) throw new Error('★発行済みが 直せない★（決めが 戻っている）');
+    if (!D.canEdit({ status: 'void' })) throw new Error('★取り消し済みが 直せない★（司さんの 名指し）');
     if (D.canDelete({ status: 'issued' })) throw new Error('発行済みが消せてしまう');
     if (!D.canDelete({ status: 'draft' })) throw new Error('下書きが消せない');
   });
@@ -199,10 +203,21 @@ T('★境界(月末・うるう年・年またぎ)を実物で測る', () => {
 });
 
 /* ③ 発行したら固まる ------------------------------------------------ */
-T('★下書きだけが直せる・消せる。発行済みは取り消すだけ（行は残す）', () => {
-  ok(D.canEdit({ status: 'draft' })); ok(D.canDelete({ status: 'draft' }));
-  ok(!D.canEdit({ status: 'issued' })); ok(!D.canDelete({ status: 'issued' }));
-  ok(!D.canEdit({ status: 'void' })); ok(!D.canDelete({ status: 'void' }));
+T('★いつでも直せる。消せるのは下書きだけ・発行済みは取り消すだけ（行は残す）', () => {
+  /* ★2026-09-09 決めが 変わった★（司さん
+       「発行とゆう概念が めんどくさい／★代行請求書のように いつでも編集できるように★」
+       ＋「一覧から 取り消して 入力画面はいると ★何も触れない★」）
+     ★代行請求の 実物★＝請求書に 状態の 列が 無く、過去月でも PDFを 出した後でも
+       ★何のブロックも 無く 直せる★。
+     ★守る物は 番号だけ★＝一度 決めたら 動かさない（倉庫の unique が 二度使いを 止める）。
+     ⇒ canEdit は 状態で 縛らない。★消す・取り消すの 決まりは 1文字も 変えていない★
+       （発行済みを 消すと 番号が 欠番に なるので それは 今も 出来ない）。 */
+  ok(D.canEdit({ status: 'draft' }), '下書きが 直せない');
+  ok(D.canEdit({ status: 'issued' }), '★発行済みが 直せない★');
+  ok(D.canEdit({ status: 'void' }), '★取り消し済みが 直せない★（司さんの 名指し）');
+  ok(D.canDelete({ status: 'draft' }));
+  ok(!D.canDelete({ status: 'issued' }), '★発行済みが 消せる＝番号が 欠番に なる★');
+  ok(!D.canDelete({ status: 'void' }));
   ok(D.canVoid({ status: 'issued' })); ok(!D.canVoid({ status: 'draft' }));
 });
 
@@ -309,6 +324,26 @@ const goodOrg = { data: { yago: '合同会社ZEROact', invoiceNo: 'T350000300329
 T('★そろっていれば発行できる', () => {
   const r = D.validateInvoice({ inv: goodInv(), partner: goodPartner, org: goodOrg });
   ok(r.ok, JSON.stringify(r.errors));
+});
+
+T('★お振込先が 空なら 言う（止めないが 黙らない）', () => {
+  /* 2026-09-09 司さん「振込先は 設定で 入れたら 出るんか？
+     今は 入れんかったら 出てないけん それでええんか？」
+     ★実測★ 空だと 紙に「お振込先」の 箱が ★出ない★のに、
+       発行の 検査に 振込先が 1つも 無く ★何も 言わずに 出ていた★。
+     ⇒ ★止めない★（現金・手形・相殺など 振込先が 要らない 請求も 在る）
+       ★黙らない★（客が どこへ 払えばよいか 分からない 紙に なる）。 */
+  const nashi = { data: { yago: '合同会社ZEROact', invoiceNo: 'T3500003003293' } };
+  const r = D.validateInvoice({ inv: goodInv(), partner: goodPartner, org: nashi });
+  ok(r.ok, '★振込先が 無いだけで 止めている★（現金の 請求が 出せなくなる）: ' + JSON.stringify(r.errors));
+  ok(r.warnings.some((w) => /振込先/.test(w)),
+    '★振込先が 空なのに 黙っている★: ' + JSON.stringify(r.warnings));
+  /* ★入れたら 言わない★＝いつも 出る 小言に しない */
+  const ari = { data: { yago: '合同会社ZEROact', invoiceNo: 'T3500003003293',
+    bank: '伊予銀行 今治支店 普通 1234567' } };
+  const r2 = D.validateInvoice({ inv: goodInv(), partner: goodPartner, org: ari });
+  ok(!r2.warnings.some((w) => /振込先/.test(w)),
+    '★入れているのに まだ 言っている★: ' + JSON.stringify(r2.warnings));
 });
 
 T('★足りない物は空欄で通さず、1つずつ理由を出す', () => {

@@ -53,8 +53,8 @@
          その時の 成功／失敗を ★入力画面の 箱に 書くと 誰も 読めない★。
        ★確認の 箱が 出ている 間だけ そちらへ 回す★（口は 増やさない）。 */
     if (id === 'edit-err' || id === 'edit-ok') {
-      var lv = $('lv-card');
-      if (lv && lv.offsetParent) id = (id === 'edit-err') ? 'lv-err' : 'lv-ok';
+      var lv = $('scr-look');
+      if (lv && lv.classList.contains('active')) id = (id === 'edit-err') ? 'lv-err' : 'lv-ok';
     }
     var e = $(id); if (!e) return;
     var t = String(text == null ? '' : text);
@@ -85,11 +85,15 @@
   function goScreen(id) {
     /* ★画面の一覧は 1か所★＝ここに足し忘れると ★タブは光るのに 中身が真っ白★
        （2026-08-31 実際にそうなった＝請求/集計を足した日） */
-    ['scr-list', 'scr-edit', 'scr-set', 'scr-bill'].forEach(function (s) {
+    ['scr-list', 'scr-edit', 'scr-set', 'scr-bill', 'scr-look'].forEach(function (s) {
       var el = $(s); if (el) el.classList.toggle('active', s === id);
     });
+    /* ★scr-look は 下のタブに 無い★（一覧から「確認」で 来る画面）。
+       ここで 何も 光らせないと ★4つとも 消えて 今どこか 分からなくなる★ので、
+       ★来た元（一覧）を 光らせたまま★に する。 */
+    var hikaru = (id === 'scr-look') ? 'scr-list' : id;
     Array.prototype.forEach.call(document.querySelectorAll('.bn'), function (b) {
-      b.classList.toggle('on', b.getAttribute('data-scr') === id);
+      b.classList.toggle('on', b.getAttribute('data-scr') === hikaru);
     });
     try { global.scrollTo(0, 0); } catch (e) { /* 端末によっては動かないが害はない */ }
   }
@@ -522,8 +526,12 @@
     });
     /* ★取引先で しぼる★（2026-09-08）＝代行請求の 一覧と 同じ 1つだけの 絞り込み。
        ★選んでいない時は 全部★（黙って 減らさない）。 */
+    drawListMonths();
     var lp = $('l-partner');
     if (lp && lp.value) rows = rows.filter(function (v) { return v.partner_id === lp.value; });
+    /* ★何年何月分★（代行請求と 同じ＝空なら 素通り） */
+    var lm = $('l-month');
+    if (lm && lm.value) rows = rows.filter(function (v) { return billYm(v) === lm.value; });
     /* ★探す★（相手・番号・件名／請求日の範囲／金額の範囲。決まりは seikyu-find が唯一の正）
        ★何件から 何件に 絞ったかを 必ず出す★＝「消えた」と 思わせない。 */
     var FIND = global.SeikyuFind, before = rows.length, q = findQuery();
@@ -535,6 +543,17 @@
     } else {
       setText('q-hint', '');
     }
+    /* ★何件に 絞ったか・いくらか を 必ず出す★（代行請求の #listSum と 同じ）
+       ＝「消えた」と 思わせない。★絞り込み中★と 書くのは 実際に 絞っている時だけ。 */
+    var shibotta = !!((lp && lp.value) || (lm && lm.value));
+    var kei = 0, yomeru = 0;
+    rows.forEach(function (v) {
+      var g = v.totals && v.totals.grandTotal;
+      if (typeof g === 'number') { kei += g; yomeru++; }
+    });
+    setText('list-sum', rows.length + '件' + (shibotta ? '（絞り込み中）' : '')
+      + (yomeru ? '　合計 ' + yen(kei) + ' 円'
+        + (yomeru < rows.length ? '（金額が 入っている ' + yomeru + '件ぶん）' : '') : ''));
     if (!rows.length) {
       host.innerHTML = '<div class="card"><div class="empty">'
         + (S.invoices.length ? 'この絞り込みに当てはまる請求書はありません。' : 'まだ請求書がありません。「＋ 新しい請求書」から出せます。')
@@ -657,6 +676,29 @@
 
   /* ★一覧の 取引先の 選び★＝今 出ている 紙に 出てくる 相手だけ 並べる
      （1通も 無い 相手を 並べても 押す物が 増えるだけ）。 */
+  /** ★何年何月分で しぼる★（2026-09-09 司さん
+   *  「代行請求書アプリのように ここでも 請求ごとや 何年何月分とか 全体とか 選べれるようにして」）
+   *  ★代行請求と 同じ作り★＝出した紙が 在る月だけを 実データから 拾って 新しい順。
+   *    「全期間」は ★value="" の option 1個★（特別扱いを 作らない）。
+   *  ★月の 読み方は billYm 1本★＝「請求/集計」の 画面と 同じ物を 使う
+   *    （2か所で 別々に 切ると、片方だけ 直った時に 食い違う）。 */
+  function drawListMonths() {
+    var el = $('l-month'); if (!el) return;
+    var ima = el.value || '';
+    var mita = {}, list = [];
+    (S.invoices || []).forEach(function (v) {
+      var m = billYm(v); if (!m || mita[m]) return;
+      mita[m] = 1; list.push(m);
+    });
+    list.sort().reverse();
+    el.innerHTML = '<option value="">月をぜんぶ</option>'
+      + list.map(function (m) {
+        return '<option value="' + esc(m) + '"' + (m === ima ? ' selected' : '') + '>'
+          + esc(m.slice(0, 4) + '年' + String(Number(m.slice(5, 7))) + '月') + '</option>';
+      }).join('');
+    if (ima && el.value !== ima) el.value = '';   /* 無くなった月を 選んだままに しない */
+  }
+
   function drawListPartners() {
     var el = $('l-partner'); if (!el) return;
     var ima = el.value || '';
@@ -693,10 +735,13 @@
     /* srcdoc は 端末によって load が 来ない事が 在るので 時間でも 1度 合わせる（入力と 同じ） */
     global.setTimeout(fitLook, 260);
     setText('lv-h', (v.no || '（未採番）') + '　' + partnerName(v));
-    show($('lv-card'), true);
+    /* ★別の 画面へ 行く★（2026-09-09 司さん「確認押したら 違うページにいって」）
+       ＝前は 一覧の 中に 箱を 出していたので、取引先が 増えると 紙が 割り込んで
+         ★一覧が 一覧で なくなっていた★。 */
+    goScreen('scr-look');
     applyPaperGate();                 /* ★出せない紙の ボタンは 押させない★（入力と 同じ門） */
     box('lv-err', ''); box('lv-ok', '');
-    var c = $('lv-card'); if (c && c.scrollIntoView) c.scrollIntoView({ block: 'start' });
+    /* 画面を 移ると goScreen が 上へ 戻す＝ここで もう一度 動かさない */
   }
 
   /* ★一覧から 消す★＝下書きは 削除／発行済は 取り消し。
@@ -732,7 +777,6 @@
        ＝★中身は 正しく 画面の 字だけが 嘘★。お客さんは「見積のつもりが 請求書に なった」と 誤解する。 */
     var _lb = DOC.docLabel(v.doc_type || S.docType || 'invoice');
     setText('edit-h', v.id ? ((v.no || '（未採番）') + '　' + (v.status === 'issued' ? '発行済' : v.status === 'void' ? '取り消し済' : '下書き')) : ('新しい' + _lb));
-    show($('edit-locked'), locked());
     // ★別の1通に切り替えたら、前の紙の下見は消す（違う請求書の紙を出したままにしない）
     show($('pv-wrap'), false);
 
@@ -835,6 +879,13 @@
       cols: (snapCols && snapCols.items && snapCols.items.length) ? snapCols : (d.cols || null),
       lineCount: Array.isArray(prev.lines) ? prev.lines.length : 0,
       total: (prev.totals && prev.totals.grandTotal),
+      /* ★前回の 明細と 控除を そのまま 覚える★（2026-09-09 司さん
+         「項目や控除は 前のを 記憶して 消すか 足すか 選べたらええ
+           ★記憶してたら 金額変えたりするだけだから 楽★
+           （項目名や 控除名も もちろん その場で 変えれたらええ）」）
+         ★写しを 渡す★＝前の1通を 指したまま 渡すと、打った字が 前の紙まで 書き換える。 */
+      lines: Array.isArray(prev.lines) ? JSON.parse(JSON.stringify(prev.lines)) : [],
+      deductions: Array.isArray(d.deductions) ? JSON.parse(JSON.stringify(d.deductions)) : [],
     };
   }
 
@@ -1052,49 +1103,25 @@
     /* ★1問ごと保存★（下書きだけ。発行済みは触らない） */
     /* 日付と番号がそろっている下書きだけ その場で保存する
        （そろう前に保存を呼ぶと「請求日を入れてください」の赤が出る＝まだ聞いていない事で怒らない） */
-    if (DOC.canEdit(v) && v.issue_ymd && v.no) { try { saveDraft(); } catch (e) { /* 知らせは画面に出る */ } }
+    if (v.issue_ymd && v.no) { try { saveDraft(); } catch (e) { /* 知らせは画面に出る */ } }
     return true;
   }
 
+  /* ★聞かない。黙って 引き継ぐ★（2026-09-09 司さん「前回と同じで作りますか？は いらない」）
+     ★代行請求の 実物も 聞いていない★（confirm は 全部で 2か所・どちらも別用途）
+       ＝前回の 会社を 自動で 選ぶ／直前の行の 日付を 引き継ぐ／
+         会社ごとの 項目の 構成は そのまま 使う。★問いかけは 1つも 出さない★。
+     ⇒ うちも 問いを やめる。ただし ★黙っては やらない★＝
+       何を 引き継いだかを ★1行 言う★（決まり「黙って いじらない」を 破らない）。
+     ★明細の 中身は 引き継がない★（毎月 違う）＝前と 同じ。 */
   function renderGuess() {
-    var card = $('guess-card'); if (!card) return;
     var v = S.cur;
-    // 発行済み・すでに決めた1通では出さない（聞くのは新しく作る時だけ）
-    if (!v || locked() || v.id || S.guessDone) { show(card, false); return; }
-    if (!v.partner_id) { show(card, false); return; }
-
-    var prev = prevOf(v.partner_id);
-    var g = guessFrom(prev);
+    if (!v || locked() || v.id || S.guessDone) return;
+    if (!v.partner_id) return;
+    var g = guessFrom(prevOf(v.partner_id));
     S.guess = g;
-
-    if (!g) {
-      // ★初回は「前回の請求はありません」＝空欄を並べない・0と書かない
-      setText('guess-h', '前回の請求はありません');
-      $('guess-list').innerHTML = '<p class="hint">この取引先へは初めての請求です。'
-        + 'このまま明細を打てば出せます（支払期限や件名は「細かく決める」で足せます）。</p>';
-      show($('b-guess-ok'), false);
-      show($('b-guess-edit'), false);
-      show(card, true);
-      return;
-    }
-    setText('guess-h', '前回と同じで作りますか？');
-    var rows = [
-      ['前回の請求', 'No.　' + esc(g.no) + (g.total === undefined || g.total === null ? '' : '（' + yen(g.total) + ' 円）')],
-      ['支払期限', esc(termLabel(g.term))],
-      ['件名', esc(g.subject || '（なし）')],
-      ['明細の列', esc((g.cols && g.cols.items ? g.cols.items : colsOf(v).items).join('・'))],
-      ['税の入れ方', g.taxMode === 'inclusive' ? '内税' : '外税'],
-    ];
-    // ★源泉・繰越は「有る時だけ」出す（無い人の画面に増やさない）
-    if (g.gensen) rows.push(['源泉徴収', 'する（前回と同じ）']);
-    else if (partnerGensen(v.partner_id)) rows.push(['源泉徴収', 'する（この取引先の設定）']);
-    if (g.carryOn) rows.push(['繰越', '前回の残りを紙に出す']);
-    $('guess-list').innerHTML = '<table class="guess-t"><tbody>'
-      + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('')
-      + '</tbody></table>';
-    show($('b-guess-ok'), true);
-    show($('b-guess-edit'), true);
-    show(card, true);
+    if (!g) { S.guessDone = true; return; }   /* 初めての相手＝引き継ぐ物が 無い */
+    applyGuess();
   }
 
   /** ✓ を押した＝前回の中身をこの1通に入れる（明細の中身は入れない＝毎月 違うので） */
@@ -1107,13 +1134,36 @@
     if (g.taxMode) v.tax_mode = g.taxMode;
     if (g.rounding) v.rounding = g.rounding;
     if (g.templateId) v.template_id = g.templateId;
-    if (g.cols) v.data.cols = COLS.normalizeSpec(g.cols);
+    /* ★列は 引き継がない★（2026-09-09）
+       ＝「はい」を 押していた頃は「前回と 同じ列で」で よかったが、
+         ★聞かずに 自動で 入れる★ようにした今 これを やると
+         ★設定で 足した 列が 黙って 消える★（見張り seikyu-ui 2-b が 捕まえた）。
+       ★列は 設定（会社／取引先）が 唯一の 正★＝代行請求も 会社ごとの 項目構成を 使う。 */
     /* ★「前回と同じ」で源泉を消さない★
        取引先の設定で「源泉徴収の対象」にしてあるのに、前回（設定より古い1通）が
        源泉なしだと、✓ を押した瞬間に源泉が外れる＝★振り込まれる額が黙って変わる★。
        前回で足す事はあっても、★引く事はしない★（消したい時は畳みの中で自分で外す）。 */
     var wantGensen = !!g.gensen || !!(v.data && v.data.gensen) || partnerGensen(v.partner_id);
     v.data.gensen = wantGensen;
+    /* ★前回の 明細と 控除を 入れる★（2026-09-09 司さん「記憶してたら 金額変えたりするだけだから 楽」）
+       ★まだ 何も 打っていない 時だけ★＝打ち始めていたら 上書きしない（打った字を 消さない）。
+       ★名前も 金額も そのまま★＝要らない行は ×で 消す・足すのは ＋・名前は その場で 直せる
+         （どれも 前から 出来ていた＝★入れて おくだけ★が 足りなかった）。 */
+    var kara = !Array.isArray(v.lines) || v.lines.every(function (l) {
+      return !String((l && l.name) || '').trim() && !String((l && l.amount) || '').trim()
+        && !String((l && l.price) || '').trim();
+    });
+    var hikiL = 0, hikiD = 0;
+    if (kara && g.lines && g.lines.length) {
+      v.lines = g.lines.map(function (l) { return Object.assign(blankLine(), l); });
+      hikiL = v.lines.length;
+    }
+    if (kara && g.deductions && g.deductions.length && !(v.data.deductions || []).length) {
+      v.data.deductions = g.deductions.map(function (x) {
+        return { name: String((x && x.name) || ''), amount: (x && x.amount) };
+      });
+      hikiD = v.data.deductions.length;
+    }
     S.guessApplied = { subject: !!g.subject, term: !!(g.term && g.term.kind !== 'none'), gensen: !!g.gensen };
     S.guessDone = true;
     recalcDue();
@@ -1121,10 +1171,27 @@
     show($('tag-subject'), !!S.guessApplied.subject);
     show($('tag-term'), !!S.guessApplied.term);
     show($('tag-gensen'), !!S.guessApplied.gensen);
-    box('edit-ok', '前回と同じ内容を入れました。明細を打てば発行できます（直したい所は「細かく決める」から）。');
+    /* ★何を 引き継いだかを 言う★（2026-09-09 司さん「前回と同じで作りますか？は いらない」
+       ＝★聞くのは やめる。言うのは やめない★）。 */
+    var hiki = [];
+    if (g.term && g.term.kind && g.term.kind !== 'none') hiki.push('支払期限');
+    if (g.subject) hiki.push('件名');
+    if (g.templateId) hiki.push('紙の様式');
+    if (wantGensen) hiki.push('源泉徴収');
+    if (hikiL) hiki.push('明細 ' + hikiL + '行');
+    if (hikiD) hiki.push('控除 ' + hikiD + '行');
+    box('edit-ok', (g.no ? '前回（No.' + g.no + '）と 同じで 用意しました' : '前回と 同じで 用意しました')
+      + (hiki.length ? '＝' + hiki.join('・') : '')
+      + (hikiL ? '。★金額を 確かめてください★（要らない行は × で 消せます）。'
+        : '。明細を 打てば 出せます（直したい所は「細かく決める」から）。'));
   }
 
-  /* 発行済み・取り消し済みは触らせない（★押せない理由も出す★） */
+  /* ★いつでも 触れる★（2026-09-09 司さん「代行請求書のように いつでも編集できるように」
+       ＋「一覧から 取り消して 入力画面はいると ★何も触れない★」）
+     ＝欄を 塞ぐのは やめた（locked() は もう いつも false）。
+     ★「発行する」だけは 下書きの時だけ★＝
+       番号を 付ける 1回きりの 操作なので、番号が 付いた後に 出すと 二度押しに なる
+       （見張り 12-c が 捕まえた）。直した後は「保存」で 上書きする。 */
   function lockInputs() {
     var ro = locked();
     ['e-partner', 'e-issue', 'e-term', 'e-termn', 'e-due', 'e-no', 'e-subject', 'e-memo'].forEach(function (id) {
@@ -1138,10 +1205,12 @@
 
     var v = S.cur || {};
     // ★押せない物は出さない（説明で補わない）★
-    show($('b-issue'), !ro);
-    show($('b-save'), !ro);
-    show($('more-box'), !ro);
-    if (!ro) drawIssueButton();
+    /* ★番号を 付ける 前だけ★＝発行済み・取り消し済みに「発行する」は 出さない */
+    var mada = DOC.statusOf(v) === 'draft';
+    show($('b-issue'), mada);
+    show($('b-save'), true);
+    show($('more-box'), true);
+    if (mada) drawIssueButton();
 
     /* ★出した見積の主役の操作＝「請求書を作る」★（発行するが消えた後のここが次の一手）
        ★存在しない時は出さない／在るのに塞がっている時は灰色＋理由をボタンの中★ */
@@ -2444,7 +2513,11 @@
       }
       S.cur.id = r.id;
       S.dirty = false;
-      box('edit-ok', '下書きを保存しました。');
+      /* ★言葉は 状態なりに★（2026-09-09 いつでも直せるように したので
+         発行済みを 直した時に「下書きを保存しました」と 出ると 嘘に なる）。 */
+      box('edit-ok', (S.cur.status === 'issued' ? '直した内容を 保存しました（番号 ' + (S.cur.no || '') + ' は そのままです）。'
+        : S.cur.status === 'void' ? '取り消し済みの 中身を 保存しました。'
+          : '下書きを保存しました。'));
       return loadList().then(function () { fillEdit(); });
     });
   }
@@ -2754,6 +2827,39 @@
      「個人の苗字の判子の大きさと 角印の判子の大きさも 自動で選別してるか？」）
      ＝★当てて見せるだけ★。人が その場で 直せる（うちの決まり「聞いてあげる。埋めさせない」）。 */
   var sealGuess = null;
+
+  /* ★倉庫に 白い地の 判子が 残っていたら 自動で 透かす★（2026-09-09 司さん
+     「判子が ★自動で 透過されない★から 背景が 邪魔になる」）
+     ★実測（scripts/_hakaru-hanko.mjs）★
+       白い地の 判子を ★今 入れれば 透ける★（白 83%→0%／透け 0%→74%）。
+       ＝白抜きの 道具は 効いている。効いていないのは
+       ★道具を 入れた 2026-08-30 より 前に 保存した 判子★＝倉庫に 白い四角のまま 残っている。
+       今までは ★入れ直さないと 直らなかった★。
+     ⇒ 設定を 開いた時に 1度だけ 見て、白い地なら 透かして 下見に 出す。
+     ★倉庫は 触らない★＝下見に 出して「保存を押すと…」と 言うだけ
+       （決めるのは 司さん＝勝手に 会社の 判子を 書き換えない）。 */
+  var sealAutoDone = false;
+  function sealAutoTouka() {
+    if (sealAutoDone) return Promise.resolve(false);
+    var SEAL = global.SeikyuSeal;
+    var url = (S.org || {}).sealDataUrl || '';
+    if (!SEAL || !SEAL.shiroiKa || !url || sealPending) return Promise.resolve(false);
+    sealAutoDone = true;                 /* ★1度だけ★（開くたびに 何度も 言わない） */
+    return SEAL.shiroiKa(url).then(function (r) {
+      if (!r || !r.shiroi) return false;
+      return SEAL.prepare(url).then(function (p) {
+        var next = p && p.dataUrl;
+        if (!next || next === url) return false;
+        var chk = DOC.validateSeal(next);
+        if (!chk.ok) { box('seal-err', chk.reason); return false; }
+        sealPending = next;
+        fillSeal();
+        box('seal-ok', '前に 入れた 判子の ★白い背景を 透かしました★'
+          + '（白かった所 ' + r.shiro + '%）。「保存」を押すと 紙に 出ます。');
+        return true;
+      });
+    }).catch(function () { return false; });
+  }
 
   function fillSeal() {
     var d = S.org || {};
@@ -3257,6 +3363,7 @@
       $('s-zeikomi').value = (st.zeikomiTag === false) ? 'off' : '';
       $('s-bankline').value = (st.bankOneLine === true) ? 'one' : '';
       $('s-subject').value = (st.subjectOn === true) ? 'on' : '';
+      if ($('s-no')) $('s-no').value = (st.noOn === false) ? 'off' : '';
       $('s-taxnote').value = st.taxNote || '';
       /* ★率は lib が唯一の正★＝画面の見本の文にも 数字を直書きしない
          （法が変わった日に ★画面の文だけ 取り残される★のを止める） */
@@ -3327,6 +3434,9 @@
     renderColEditor();
     dedRowsShow();
     fillSeal();
+    /* ★倉庫の 判子に 白い地が 残っていたら 自動で 透かす★（2026-09-09 司さん）
+       ＝1度だけ・倉庫は 触らない（下見に 出して 保存を 押してもらう）。 */
+    sealAutoTouka();
     renderPaperAsk();   /* ★紙の作り（列・行数）の聞く形も 一緒に描き直す★ */
   }
 
@@ -4083,6 +4193,8 @@
         if ($('s-zeikomi').value === 'off') o.zeikomiTag = false;
         if ($('s-bankline').value === 'one') o.bankOneLine = true;
         if ($('s-subject').value === 'on') o.subjectOn = true;
+        /* ★出す時は 何も 書かない★（既定＝出す）／切った時だけ false を 持つ */
+        if ($('s-no') && $('s-no').value === 'off') o.noOn = false;
         if (String($('s-taxnote').value || '').trim()) o.taxNote = String($('s-taxnote').value).trim();
         if (String($('s-dedhead').value || '').trim()) o.dedHead = String($('s-dedhead').value).trim();
         if (String($('s-dedsum').value || '').trim()) o.dedSum = String($('s-dedsum').value).trim();
@@ -4239,9 +4351,12 @@
     $('b-reload').onclick = function () { return loadMasters().then(loadList); };
     /* ★一覧の 取引先の 選び★（2026-09-08） */
     if ($('l-partner')) $('l-partner').onchange = function () { renderList(); };
+    /* ★何年何月分★（2026-09-09 司さん）＝取引先と 同じ 1本の 道で 描き直す */
+    if ($('l-month')) $('l-month').onchange = function () { renderList(); };
     /* ★確認で 出した 紙の ボタン★＝作り方は 入力画面と 同じ 1本（doPdf/doPrint）。
        ★S.cur は lookPaper が すでに その1通に している★ので そのまま 使える。 */
-    if ($('b-lv-close')) $('b-lv-close').onclick = function () { show($('lv-card'), false); };
+    /* ★戻る道は 1つ★＝「← 一覧へ戻る」。下のタブの「一覧」でも 戻れる。 */
+    if ($('b-lv-back')) $('b-lv-back').onclick = function () { goScreen('scr-list'); };
 
 
     $('e-partner').onchange = function () {
@@ -4345,13 +4460,8 @@
       drawGensenHint();
     };
     $('s-carry').onchange = function () { settingsHint(); };
-    $('b-guess-ok').onclick = function () { applyGuess(); };
-    $('b-guess-edit').onclick = function () {
-      S.guessDone = true;
-      renderGuess();
-      var m = $('more-box'); if (m) m.open = true;
-      box('edit-ok', '');
-    };
+    /* ★「はい／ちがう」の ボタンは 消した★（2026-09-09 司さん「前回と同じで作りますか？は いらない」）
+       ＝聞かずに 引き継ぐ（renderGuess が その場で applyGuess を 呼ぶ）。 */
     bindSetPv();
     if ($('b-preview')) $('b-preview').onclick = function () { doPreview(); };
     /* ★印刷は 名前を 聞かない★（司さん 2026-09-05「印刷押すだけ これはいらんやろが」）
