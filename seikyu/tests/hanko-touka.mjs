@@ -13,6 +13,11 @@
  *   ② 白い地の 判子を 通すと ★本当に 透ける★（白が 減り 透けが 増える）
  *   ③ ★透けている 判子は 触らない★（余計な いじりを しない）
  *   ④ 空振りしない（作り物が 本当に 白い地／道具が 本当に 在る）
+ *   ⑥ ★大きさで 断らない★（2026-09-10 司さん
+ *      「判子の ファイルや 画像が 300KB以下にしてって出るけど 正常か？」
+ *       →「★判子も 上限きめんなや★」）
+ *      ＝上限そのものを 外した。★代行請求（daikou-seikyu.html）にも 上限は 無い★。
+ *   ⑦ ★大きい 写真は こちらで 小さくする★（人に「小さくしてから 入れ直せ」と 言わない）
  *
  * ★実ブラウザで 測る★＝canvas の 画素を 数えるので jsdom では 測れない。
  * 使い方: node seikyu/tests/hanko-touka.mjs [--self-test]
@@ -92,6 +97,53 @@ const r = await pg.evaluate(async () => {
   /* ★もう 透けている 判子★＝触らないで ほしい物 */
   const suketa = p && p.dataUrl ? p.dataUrl : shiroi;
   out.mite_suketa = await SEAL.shiroiKa(suketa);
+
+  /* ★スマホで 撮った 判子★＝白い紙の上に 朱の 角印、大きく、少しざらつく。
+     ★十分 大きい事を 先に 測る★＝小さい 作り物では この検査は 何も 見ていない。 */
+  const shashin = (() => {
+    const N = 1500;
+    const c = document.createElement('canvas'); c.width = N; c.height = N;
+    const x = c.getContext('2d');
+    x.fillStyle = '#FFFFFF'; x.fillRect(0, 0, N, N);
+    const im = x.getImageData(0, 0, N, N); const d = im.data;
+    /* ★本当に ばらつかせる★＝規則的な 模様は PNGが 縮めてしまい
+       ★上限を 超えない 作り物★に なる（2026-09-10 実測＝53KBにしかならなかった）。
+       白抜きの しきい（235以上＝白）より 上に 収めて、紙の ざらつきだけ 作る。 */
+    let rnd = 123456789;
+    for (let i = 0; i < d.length; i += 4) {
+      rnd ^= rnd << 13; rnd ^= rnd >>> 17; rnd ^= rnd << 5;
+      const n = 240 + (Math.abs(rnd) % 16);
+      d[i] = n; d[i + 1] = n; d[i + 2] = n;
+    }
+    x.putImageData(im, 0, 0);
+    x.strokeStyle = '#C8102E'; x.lineWidth = 34;
+    x.strokeRect(500, 500, 500, 500);
+    x.fillStyle = '#C8102E';
+    x.font = 'bold 150px serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText('印', N / 2, N / 2);
+    return c.toDataURL('image/png');
+  })();
+  const bytes = (u) => {
+    const b64 = String(u).split(',')[1] || '';
+    const pad = b64.slice(-2) === '==' ? 2 : (b64.slice(-1) === '=' ? 1 : 0);
+    return Math.floor(b64.length * 3 / 4) - pad;
+  };
+  const DOC = window.SeikyuDoc;
+  out.shashin_byte = bytes(shashin);
+  /* ★上限そのものが 無い★＝大きいまま 通る（形だけ 見る） */
+  out.ookii_toru = DOC.validateSeal(shashin).ok;
+  out.soto = DOC.validateSeal('https://example.com/hanko.png').ok;
+  out.svg = DOC.validateSeal('data:image/svg+xml;base64,PHN2Zz4=').ok;
+  /* ★お客さんが 通る道★＝ファイルを 選んだ時と 同じ（_pickSealUrl は それを 呼ぶだけ） */
+  const A = window.SeikyuApp;
+  A._go('scr-set');
+  const chk = A._pickSealUrl(shashin);
+  out.kotowatta = !(chk && chk.ok);
+  out.err = (document.getElementById('seal-err') || {}).textContent || '';
+  if (chk && chk.guessed) { await chk.guessed; }
+  const pv = document.getElementById('seal-pv');
+  out.deta_byte = pv && pv.getAttribute('src') ? bytes(pv.getAttribute('src')) : 0;
+  out.err_ato = (document.getElementById('seal-err') || {}).textContent || '';
   return out;
 });
 await b.close(); srv.close();
@@ -129,6 +181,43 @@ T('★③ もう 透けている 判子は「白い地」と 言わない（余�
     '★透けているのに「白い地」と 言っている★＝開くたびに いじり続ける '
     + JSON.stringify(r.mite_suketa));
   console.log('     透けた判子 … 白 ' + r.mite_suketa.shiro + '% ／ 透け ' + r.mite_suketa.suke + '% → 触らない');
+});
+
+T('★⑥ 大きさで 断らない（上限そのものが 無い）', () => {
+  /* ★司さん 2026-09-10「★判子も 上限きめんなや★」★
+     ＝形（PNG/JPEG か）だけ 見る。大きさは 断る材料に しない。 */
+  ok(r.shashin_byte > 1024 * 1024,
+    '★作り物が 小さすぎ＝この検査は 何も 見ていない★ ' + Math.round(r.shashin_byte / 1024) + 'KB');
+  console.log('     選んだ 写真 … ' + Math.round(r.shashin_byte / 1024) + 'KB');
+  ok(r.ookii_toru, '★大きいだけで 断っている（上限が 残っている）★');
+  ok(!r.kotowatta, '★選んだ その場で 断っている★');
+  ok(!r.err, '★赤い 知らせが 出ている★: ' + r.err);
+  /* ★形では 断る★＝ここまで 素通りに なっていないか */
+  ok(!r.soto, '★外のURLまで 通っている＝形も 見ていない★');
+  ok(!r.svg, '★PNG/JPEG でない物まで 通っている★');
+});
+
+T('★⑦ 大きい 写真は こちらで 小さくする（人に 小さくさせない）', () => {
+  ok(r.deta_byte > 0, '★下見に 何も 出ていない★');
+  ok(r.deta_byte < r.shashin_byte / 10,
+    '★ほとんど 小さく なっていない★ ' + Math.round(r.shashin_byte / 1024) + 'KB → '
+    + Math.round(r.deta_byte / 1024) + 'KB');
+  ok(!r.err_ato, '★そろえた後に 赤い 知らせが 出ている★: ' + r.err_ato);
+  console.log('     ' + Math.round(r.shashin_byte / 1024) + 'KB → ★'
+    + Math.round(r.deta_byte / 1024) + 'KB★（そろえた後）');
+});
+
+T('★⑧ 判子を 受け取る 道は 1本（見張り用の 別の道を 作らない）', () => {
+  /* ★2026-09-10 実測で 踏んだ★＝見張り用の 入口が 同じ事を 別に 書いていて、
+     ★お客さんの 道だけ 直しても 見張りは 古い道を 見ていた★（逆も 起きる）。 */
+  const app = fs.readFileSync(path.join(ROOT, 'seikyu', 'js', 'seikyu-app.js'), 'utf8');
+  ok(app.indexOf('function sealUrlPicked(url) {') > 0, '★受け取る 道が 無い★');
+  ok(app.indexOf('_pickSealUrl: function (url) { return sealUrlPicked(url); }') > 0,
+    '★見張り用の 入口が 別の道を 通っている★');
+  /* ★大きさで 断る 決まりが どこにも 残っていない★（司さん「上限きめんなや」） */
+  const lib = fs.readFileSync(path.join(ROOT, 'seikyu', 'lib', 'seikyu-doc.js'), 'utf8');
+  ok(lib.indexOf('SEAL_MAX_BYTES') < 0, '★上限が まだ 在る★');
+  ok(lib.indexOf('画像が大きすぎます') < 0, '★大きすぎると 断る 言い方が 残っている★');
 });
 
 T('★⑤ 設定を 開いた時に 呼んでいる（作っただけで 使っていない を 止める）', () => {
