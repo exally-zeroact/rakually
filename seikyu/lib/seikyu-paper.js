@@ -660,15 +660,15 @@
 
     /* 明細の見出し（items のとおり・その順） */
     var headHtml = spec.items.map(function (k, c) {
-      return '<th class="c-col" style="width:' + colW[c].toFixed(4) + '%;text-align:' + COLS.alignOf(spec, k) + '">' + esc(k) + '</th>';
+      return '<th class="c-col' + gapR(spec, c) + '" style="width:' + colW[c].toFixed(4) + '%;text-align:' + COLS.alignOf(spec, k) + '">' + esc(k) + '</th>';
     }).join('');
 
     /* ★足りない行は「空の枠」のまま残す★（罫線を消さない・詰めない）
        ここで詰めると ★中身の本数で紙の顔が毎月 変わる★＝経理が毎回 探し直す。 */
     function blankRowsHtml(n) {
       if (n <= 0) return '';
-      var tds = spec.items.map(function (k) {
-        return '<td class="c-col c-' + COLS.alignOf(spec, k) + ' c-blank">&nbsp;</td>';
+      var tds = spec.items.map(function (k, ci) {
+        return '<td class="c-col c-' + COLS.alignOf(spec, k) + ' c-blank' + gapR(spec, ci) + '">&nbsp;</td>';
       }).join('');
       var out = '';
       for (var i = 0; i < n; i++) out += '<tr class="r-blank">' + tds + '</tr>';
@@ -719,11 +719,19 @@
           var body = cell.kind === 'money' ? (cell.text === '' ? '' : comma(cell.text))
             : cell.kind === 'num' ? (cell.text === '' ? '' : num(cell.text))
               : esc(cell.text);
-          if (role === 'name' && ln.memo && !hasRole(spec.items, 'memo')) {
-            body += '<span class="c-memo">' + esc(ln.memo) + '</span>';
-          }
+          /* ★★品名の 下に 備考を 出すのは やめました★★（2026-09-10 司さん
+               「なんで 勝手に 項目を 2行に しとんど／★誰が 指示したんだ★」）
+             ★測った事実★ この仕組みは 2026-08-18 の「Rakually の器を立てる」に
+               最初から 入っていて、★司さんが 頼んだ 記録は 1件も 無い★
+               （見張りも 0本）＝私が 勝手に 足した物。
+             ★司さんの 実物★（黒田空調 2026/7分・2026-09-08 に 本人が 見せた）は
+               備考が ★列★（消費税の 右隣）。品名の 下では ない。
+             ★実害★ 1行が 2行に なるのに 行数の 計算は 1行としか 数えず、
+               A4を はみ出して ★合計も 振込先も 丸ごと 消えていた★（実測 +310px）。
+             ⇒ 出すのを やめる。備考は ★列★だけ
+               （設定 ▸ 明細の列 で 足せる／様式「項目・金額＋備考」は 既定で 持つ）。 */
           return '<td class="c-col c-' + al + ((cell.kind === 'text' && !noWrap) ? ' c-wrap' : '')
-            + (noWrap ? ' c-nowrap' : '') + '">' + body + '</td>';
+            + (noWrap ? ' c-nowrap' : '') + gapR(spec, spec.items.indexOf(k)) + '">' + body + '</td>';
         }).join('') + '</tr>';
       }).join('') + blankRowsHtml(fr - pageLines.length);
     }
@@ -737,6 +745,22 @@
          ・表で組めば ★中身が伸びても 下は いつも そろう★
        ★頭は 低くなる★＝自社(19.4mm)が あて名(7.2mm)の高さを 決めていたのを やめるので、
          明細に使える高さが 増える（★行数は 測り直す★）。 */
+    /* ★消費税と 備考の 間に すきまを 作る★（2026-09-10 司さん
+       「★全部のテンプレでなんやけど 消費税と備考欄の間が 少な過ぎる★
+         消費税を もう少し 金額側に 寄せて 間をもって」）
+       ＝消費税は 右寄せなので、右隣に 備考が 来ると ★数字と 現場名が くっついて 見える★。
+       ★1か所で 決める★＝様式ごとに 幅を いじらない
+         （様式は 4つ／会社が 自分で 列を 足す 道も 在るので、
+           ★「消費税の 右隣が 備考」なら いつでも★ 効くようにする）。
+       ★消費税が いちばん右の 様式（std1・elegant）には 効かない★＝
+         そこに すきまを 足すと 紙の 右の 余白が ずれるだけ。 */
+    function gapR(sp, i) {
+      var items = (sp && sp.items) || [];
+      if (i < 0 || i + 1 >= items.length) return '';
+      if (COLS.roleOfIn(sp, items[i]) !== 'tax') return '';
+      return (COLS.roleOfIn(sp, items[i + 1]) === 'memo') ? ' c-gap-r' : '';
+    }
+
     function headBlock(pageIdx, midHtml) {
       /* 並びは 請求日 → No. → お支払期限。
          ★番号は空でも欄を出す（「（未採番）」と書く）＝取れなかったを空欄にしない★ */
@@ -1470,7 +1494,9 @@
       "font-family:'DM Mono',ui-monospace,monospace;}",
       '.items .c-wrap{word-break:normal;overflow-wrap:break-word;}',
       '.items .c-nowrap{white-space:nowrap;}',
-      '.c-memo{display:block;font-size:8.5pt;color:' + SUB + ';line-height:1.6;margin-top:.5mm;}',
+      /* ★消費税の 右に すきま★（2026-09-10 司さん「消費税を もう少し 金額側に 寄せて 間をもって」）
+         ＝右寄せの 数字が 右へ 寄り切らない＝金額の 側に 寄る。 */
+      '.items .c-gap-r{padding-right:5mm;}',
       '.c-empty{text-align:center;color:' + SUB + ';padding:6mm 2mm;}',
 
       /* ★足元＝左に振込先／右に合計（表の2列＝文が縦に割れない）★ */
