@@ -84,12 +84,17 @@ if (process.argv.includes('--self-test')) {
     } finally { libs.SHH.KENKO_2026.tokyo = keep; }
   });
 
+  /* ★年を 手で 書かない★（2026-09-12・今日5つ目の同じ形）＝ここに 'saitei_chingin:2025' と
+     打ち込んで あった為、令和8へ 進めた途端 ★わざと壊しても 赤に ならない＝見逃し★ に なった。
+     ⇒ ★lib が 持つ 年度★ から 作る。 */
+  const SAI_KEY = () => 'saitei_chingin:' + libs.SAI.NENDO_YEAR;
+
   T('★最賃を1県だけ変えても赤', () => {
     const keep = libs.SAI.todofuken.tokyo.chingin;
     try {
       libs.SAI.todofuken.tokyo.chingin = 1227;
       const bad = checkAgainstCentral(SR.buildStatutoryRows(libs), SM.get);
-      if (!bad.filter(b => b.key === 'saitei_chingin:2025').length) throw new Error('赤になっていない');
+      if (!bad.filter(b => b.key === SAI_KEY()).length) throw new Error('赤になっていない');
     } finally { libs.SAI.todofuken.tokyo.chingin = keep; }
   });
 
@@ -98,7 +103,7 @@ if (process.argv.includes('--self-test')) {
     try {
       libs.SAI.todofuken.akita.hatsuko = '2025-10-01';
       const bad = checkAgainstCentral(SR.buildStatutoryRows(libs), SM.get);
-      if (!bad.filter(b => b.key === 'saitei_chingin:2025').length) throw new Error('★発効日のズレを拾えていない');
+      if (!bad.filter(b => b.key === SAI_KEY()).length) throw new Error('★発効日のズレを拾えていない');
     } finally { libs.SAI.todofuken.akita.hatsuko = keep; }
   });
 
@@ -107,7 +112,7 @@ if (process.argv.includes('--self-test')) {
     try {
       libs.SAI.todofuken.gunma.prev = 900;
       const bad = checkAgainstCentral(SR.buildStatutoryRows(libs), SM.get);
-      if (!bad.filter(b => b.key === 'saitei_chingin:2025').length) throw new Error('前年額のズレを拾えていない');
+      if (!bad.filter(b => b.key === SAI_KEY()).length) throw new Error('前年額のズレを拾えていない');
     } finally { libs.SAI.todofuken.gunma.prev = keep; }
   });
 
@@ -151,10 +156,25 @@ T('★出典URLと確認日が全行に入っている（中央から来てい�
 });
 
 T('中央の行と lib の行が1対1（増えても減っても気づける）', () => {
+  /* ★2026-09-12＝「過去の年度」は 不整合に しない★
+     法定は ★年度ごとに 行が 増える★物で、古い年度の行は ★中央に 履歴として 残す★のが正しい。
+     令和8を 中央へ 入れた途端 令和7(saitei_chingin:2025)が「中央にあってlibに無い」で 赤に なった
+     ＝★狼少年に なる★。
+     ⇒ ★同じ kind で より新しい年が 在るなら、その古い行は 見逃す★。
+        ★libに 一度も 出てこない kind（配線の抜け）と、
+          libに在るのに 中央に無い（入れ忘れ）は 赤のまま★＝ここが 本当に危ない所。 */
   const rowKeys = rows.map(r => r.kind + ':' + r.year).sort();
   const metaKeys = SM.keys();
+  const libKind = {};
+  rows.forEach(r => { libKind[r.kind] = Math.max(libKind[r.kind] || 0, r.year); });
   const missing = rowKeys.filter(k => metaKeys.indexOf(k) < 0);
-  const extra = metaKeys.filter(k => rowKeys.indexOf(k) < 0);
+  const extra = metaKeys.filter(k => {
+    if (rowKeys.indexOf(k) >= 0) return false;
+    const kind = k.slice(0, k.lastIndexOf(':'));
+    const year = +k.slice(k.lastIndexOf(':') + 1);
+    if (!(kind in libKind)) return true;            /* libが 1つも 作らない kind＝配線の抜け */
+    return year >= libKind[kind];                   /* 最新か それ以降なら 赤（過去は 履歴） */
+  });
   if (missing.length || extra.length) {
     throw new Error('不整合: libにあって中央に無い=' + (missing.join(', ') || 'なし') + ' / 中央にあってlibに無い=' + (extra.join(', ') || 'なし'));
   }
