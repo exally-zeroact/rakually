@@ -88,6 +88,25 @@ T('★新しい中央が 来たら ちゃんと 入る（弾きすぎない）�
   eq(SC.NENDO_YEAR, 2026, '年度を 戻せていない');
 });
 
+T('★発効日が まだ「予定」の間は 字に 出す（確定として 出さない）★', function () {
+  /* ★出どころの PDF に 厚労省自身が こう書いている（2026-09-12 原文を確認）★
+       表題「令和8年度 地域別最低賃金 答申状況」／列名「発効日（予定）（※2）」
+       ※2「発効日は、答申公示後の異議の申出の状況等により変更となる可能性有」
+     ⇒ ★予定を 確定として 客に 出しては いけない★。★額は ほぼ変わらないが 日付は 変わり得る★
+        ＝月内で 分かれる判定に 直に 効く。 */
+  ok(typeof SC.HATSUKO_MITEI === 'boolean', 'HATSUKO_MITEI が 無い');
+  ok(typeof SC.HATSUKO_MITEI_RIYU === 'string' && SC.HATSUKO_MITEI_RIYU.length > 10, '理由が 書いていない');
+  /* ★年度の欄には 混ぜない★＝年度は 年度だけ（去年の行と 同じ形） */
+  ok(!/予定/.test(SC.NENDO), '★年度の欄に 発効日の話を 混ぜている: ' + SC.NENDO + '★');
+  if (SC.HATSUKO_MITEI) {
+    ok(/予定/.test(SC.HATSUKO_CHUI), '★予定なのに 注意の欄に 出ていない: ' + SC.HATSUKO_CHUI + '★');
+    ok(/変わる事/.test(SC.HATSUKO_CHUI), '★「予定」だけでは 弱い＝「変わる事が あります」まで 書く★');
+    ok(/変更となる可能性/.test(SC.HATSUKO_MITEI_RIYU), '★理由が 原文と 合っていない★');
+  } else {
+    ok(SC.HATSUKO_CHUI === '', '★確定なのに 注意が 残っている★');
+  }
+});
+
 T('最賃: 47都道府県すべて存在', function () {
   eq(Object.keys(SC.todofuken).length, 47);
   eq(Object.keys(R7).length, 47);
