@@ -12,7 +12,7 @@
  *   に合わせて、環境の名札もここに置く。他のファイルに倉庫の名前を書かせない。
  *   ★本番(rakually)の supa-config.js は env:'prod'。だから本番に帯は出ない。★ */
 window.SUPA = {
-  url: 'https://khawdrnvssdenumbiwfg.supabase.co',
-  key: 'sb_publishable_UrRIobyVFbaJI_85RBxBOA_GZ4OUxPm',
-  env: 'test'
+  url: 'https://tnfwipbgfgjaymlszeid.supabase.co',
+  key: 'sb_publishable_UHPc5Vh6jMsMA-EXmITHig_KvZC0sQe',
+  env: 'prod'
 };
