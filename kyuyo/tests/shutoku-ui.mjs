@@ -86,15 +86,31 @@ const T = (n, c, m) => { if (c) { pass++; console.log('  ✓ ' + n); } else { fa
 const machi = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* 欄に 打つ（本物の 入力＝アプリが change を 拾う） */
-async function utsu(pg, sel, val) {
-  const el = await pg.$(sel);
-  if (!el) return false;
-  const tag = await el.evaluate((e) => e.tagName.toLowerCase());
-  if (tag === 'select') await el.selectOption(String(val));
-  else { await el.fill(''); await el.type(String(val)); }
-  await el.evaluate((e) => { e.dispatchEvent(new Event('change', { bubbles: true })); });
-  await machi(160);
-  return true;
+/* ★★打った値が「本当に 入ったか」を 見てから 次へ進む（2026-09-14）★★
+   ★この 試験が CI から 外されていた 訳そのもの★＝
+     「★CIでは 打った 値が 次の 描き直しに 間に合わず 落ちる★（私の 待ち方が 足りない）」。
+   同じ日に fuyo-ui が ★手元 緑・CI 赤★で 同じ所に 落ち、中身は ★日付の 欄だけ★だった:
+     input[type=date] に ★1字ずつ 打っていた★＝engine と 土地で 打ち方が 変わる。
+   ⇒ ①★fill() で 入れる★ ②★読み返して 見比べる／違えば もう一度（3回）★
+     ③それでも 違えば ★false を 返す★＝呼んだ側が 🟡で 言う（★黙って 次へ進まない★）。 */
+async function utsu(pg, sel, val, kai = 3) {
+  const nozomi = String(val);
+  for (let i = 0; i < kai; i++) {
+    const el = await pg.$(sel);
+    if (!el) { await machi(250); continue; }
+    let tag = 'input';
+    try { tag = await el.evaluate((e) => e.tagName.toLowerCase()); } catch (e) { await machi(250); continue; }
+    try {
+      if (tag === 'select') await el.selectOption(nozomi);
+      else await el.fill(nozomi);
+      await el.evaluate((e) => { e.dispatchEvent(new Event('change', { bubbles: true })); });
+    } catch (e) { await machi(300); continue; }
+    await machi(180);
+    const ima = await pg.$(sel).then((e2) => (e2 ? e2.inputValue() : null)).catch(() => null);
+    if (ima === nozomi) return true;
+    await machi(320);
+  }
+  return false;
 }
 /* ★本物の マウスで 押す★（JSで イベントを 投げた 物は「お客さんの 道」では ない＝会社の決まり） */
 async function tataku(pg, sel) {
@@ -110,6 +126,20 @@ console.log('\n[shutoku-ui] 資格取得届を ★実ブラウザで お客さ�
    ⇒ 門は 項番7「事業所所在地／入力されていること」で 止める。★お客さんの 道どおり そこで 入れる★ */
 const ctx = await b.newContext({ viewport: { width: 1000, height: 1400 }, acceptDownloads: true });
 const pg = await ctx.newPage();
+/* ★★「前」は ★ログインの 前★に 数える（2026-09-14 実測で 直した）★★
+   ログインの 後に 数えたら ★人 4→3（-1）★で 赤に なった。
+   訳＝★ログインした 途端に 既定の『従業員 1』が 倉庫に 書かれる★（今日 見つけた 幻の人）。
+     その後 読み直しが 着いて 消えるので、★後に 数えると 1人 減って 見える★。
+   ⇒ ★1行も 触っていない 時の 数★を 土台に する。 */
+const { kazoeru: KAZOERU, awaseru: AWASERU, konkaiNoGomiKesu: GOMI_KESU, ima: IMA } = await import('./_souko-kazoeru.mjs');
+/* ★始まりは ★倉庫の 時計★に 聞く★＝手元の 時計から 遡ると
+   ★直前の 試験の ゴミまで 窓に 入り、自分が 作っていない 物を 消す★（総なめで 捕まった）。 */
+const HAJIME = await IMA().then((x) => (x.ok ? x.t : new Date(Date.now() - 5000).toISOString()));
+const soukoMae = await KAZOERU();
+console.log('  倉庫（前） … ' + (soukoMae.ok
+  ? '人 ' + soukoMae.hito + ' ／ 明細 ' + soukoMae.meisai
+  : '🟡 ★読めない★ ' + soukoMae.naze));
+
 const h = await hairu(pg, 'http://localhost:' + PORT + '/kyuyo/index.html', '.bn[data-scr="scr-settings"]');
 if (!h.haitta) { console.log('  🟡 ★未測定★ ' + h.kai + '回 試して 入れなかった … 画面の 言い分 … ' + (h.naze || '（無し）')); await b.close(); srv.close(); process.exit(2); }
 await machi(600);
@@ -123,7 +153,25 @@ console.log('  （はじめに 居た 人 … ' + hito0 + '人）');
 /* ── ① 従業員を 1人 足して、要る 欄を 開く ─────────────────── */
 await osu(pg, '.bn[data-scr="scr-settings"]'); await machi(500);
 await osu(pg, '#set-seg .seg-b[data-set="emp"]'); await machi(700);
-await osu(pg, '#b-add-emp'); await machi(900);
+/* ★★札が 増えるのを 待つ（2026-09-14 CIで 捕まった）★★
+   前は ★足して 0.9秒 待つだけ★で 一番 後ろの 札を 読んでいた。
+   ★CI は 遅い★ので 描き直しが 間に合わず、★増える前の 札★を 掴んだ:
+     「（はじめに 居た 人 1人 → 今 足した 人＝★札 0番目★）」
+     ⇒ その後 ★欄が 1つも 見つからない★（name/kana/… 全部）＝赤。
+   ＝★手元は 緑・CIは 赤★の 一番 見つけにくい 形（今日 3回目）。
+   ⇒ ★数が 増えた事を 見てから 読む★（★時間では なく 数で 待つ★）。 */
+  {
+    const kazuMae = await pg.evaluate(() => document.querySelectorAll('#emp-list .mco').length);
+    await osu(pg, '#b-add-emp');
+    let fueta = false;
+    for (let i = 0; i < 40; i++) {                 /* 20秒 */
+      const n = await pg.evaluate(() => document.querySelectorAll('#emp-list .mco').length).catch(() => -1);
+      if (n > kazuMae) { fueta = true; break; }
+      await machi(500);
+    }
+    if (!fueta) console.log('       🟡 ★札が 増えない★（20秒 待った）＝この先は 当てに ならない');
+    await machi(400);
+  }
 /* ★この 口座には 前の 回の 人が 残る★（実測 2026-09-05）＝★今 足した 人＝一番 下の 札★だけを 触る。
    1人目を 触ると ★前の 回の 人を 書き換える★事に なる（実際 1回 やって 空振りした）。 */
 const IDX = await pg.evaluate(() => {
@@ -167,6 +215,12 @@ async function chohyo() {
 /* ★名前は 毎回 変える★＝この 試験の 口座には ★前の 回の 人が 残る★（実測 2026-09-05）。
    「誰も 出せない はず」で 見ると ★前の 回の 人が 出せてしまい 赤に なる★＝時によって 変わる。
    ⇒★今 足した その人★だけを 名指しで 見る。 */
+/* ★★置き土産は ★倉庫の 行数★ で 数える（2026-09-14 私の 不始末）★★
+   前は ★画面に その 名前の 札が 残っていないか★だけを 見て 緑を 出していた。
+   ★倉庫には 残る★＝画面の 削除は ★従業員を 消すだけ／明細は 孤児に なる★（実測 3,599行）。
+   ⇒ ★pay_employees と pay_payslips の 行数を 前後で 突き合わせる★。
+     ★画面から 消えた は 緑の 根拠に しない★。 */
+
 const NA = '試験' + String(Date.now()).slice(-6);   /* ★氏名（漢字）は 姓と名の 間に 全角スペース1つ★（項番8） */
 await utsu(pg, CARD + ' [data-f="name"]', NA);
 await utsu(pg, CARD + ' [data-f="joinYmd"]', '2026-04-01');
@@ -267,6 +321,17 @@ if (ato.osenai === false) {
     .filter((x) => ((x.querySelector('.mco-nm') || {}).textContent || '').indexOf(na) >= 0).length, NA);
   T('★⑤ 後始末＝この 試験が 足した 人を 消した（ゴミを 残さない）', nokori === 0,
     '「' + NA + '」が ' + nokori + '人 残っている（' + keshita + '）');
+}
+
+/* ★本当の 判じは 倉庫★＝画面の 数では ない */
+{
+  const kesu = await GOMI_KESU(HAJIME);      /* ★この回で 出た 孤児だけ★（前からの 分には 触らない） */
+  if (!kesu.ok) console.log('       🟡 この回の 明細を 消せなかった … ' + kesu.naze);
+  const sou = await AWASERU(soukoMae, 20);
+  if (sou.han === '環境') console.log('  ' + sou.iu);   /* ★緑で 通すが 数は 出す★（総なめが 拾う 字） */
+  else if (sou.han === '未測定') { mihakari++; console.log('  🟡 ★未測定★ 後始末を 倉庫で 数えられない … ' + sou.iu); }
+  else T('★⑥ 後始末＝★倉庫の 行数★が 元に 戻った', sou.han === '緑', sou.iu);
+  if (sou.han === '緑') console.log('       ' + sou.iu);
 }
 
 await pg.close(); await b.close(); srv.close();

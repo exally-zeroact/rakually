@@ -109,6 +109,19 @@ console.log('\n[seirino-ui] 被保険者整理番号が ★画面から 入り �
 
 const ctx = await b.newContext({ viewport: { width: 1200, height: 1400 }, acceptDownloads: true });
 const pg = await ctx.newPage();
+/* ★★置き土産は ★倉庫の 行数★ で 数える（2026-09-14 私の 不始末）★★
+   前は ★画面の 札の 数★だけで「ゴミ0」と 緑を 出していた＝★倉庫には 残っていた★。
+   ★「前」は ログインの 前に 数える★＝ログインした 途端に 既定の『従業員 1』が 倉庫に 書かれ、
+   後から 読み直しで 消えるので、後に 数えると 1人 減って 見える（今日 実測）。 */
+const { kazoeru: KAZOERU, awaseru: AWASERU, konkaiNoGomiKesu: GOMI_KESU, ima: IMA } = await import('./_souko-kazoeru.mjs');
+/* ★始まりは ★倉庫の 時計★に 聞く★＝手元の 時計から 遡ると
+   ★直前の 試験の ゴミまで 窓に 入り、自分が 作っていない 物を 消す★（総なめで 捕まった）。 */
+const HAJIME = await IMA().then((x) => (x.ok ? x.t : new Date(Date.now() - 5000).toISOString()));
+const soukoMae = await KAZOERU();
+console.log('  倉庫（前） … ' + (soukoMae.ok
+  ? '人 ' + soukoMae.hito + ' ／ 明細 ' + soukoMae.meisai
+  : '🟡 ★読めない★ ' + soukoMae.naze));
+
 const h = await hairu(pg, 'http://localhost:' + PORT + '/kyuyo/index.html', '.bn[data-scr="scr-settings"]');
 if (!h.haitta) {
   console.log('  🟡 ★未測定★ ' + h.kai + '回 試して 入れなかった … ' + (h.naze || '（無し）'));
@@ -122,7 +135,25 @@ const JOIN = '2026-04-01';
 try {
   await osu(pg, '.bn[data-scr="scr-settings"]'); await machi(500);
   await osu(pg, '#set-seg .seg-b[data-set="emp"]'); await machi(800);
-  await osu(pg, '#b-add-emp'); await machi(900);
+  /* ★★札が 増えるのを 待つ（2026-09-14 CIで 捕まった）★★
+     前は ★足して 0.9秒 待つだけ★で 一番 後ろの 札を 読んでいた。
+     ★CI は 遅い★ので 描き直しが 間に合わず、★増える前の 札★を 掴んだ:
+       「（はじめに 居た 人 1人 → 今 足した 人＝★札 0番目★）」
+       ⇒ その後 ★欄が 1つも 見つからない★（name/kana/… 全部）＝赤。
+     ＝★手元は 緑・CIは 赤★の 一番 見つけにくい 形（今日 3回目）。
+     ⇒ ★数が 増えた事を 見てから 読む★（★時間では なく 数で 待つ★）。 */
+    {
+      const kazuMae = await pg.evaluate(() => document.querySelectorAll('#emp-list .mco').length);
+      await osu(pg, '#b-add-emp');
+      let fueta = false;
+      for (let i = 0; i < 40; i++) {                 /* 20秒 */
+        const n = await pg.evaluate(() => document.querySelectorAll('#emp-list .mco').length).catch(() => -1);
+        if (n > kazuMae) { fueta = true; break; }
+        await machi(500);
+      }
+      if (!fueta) console.log('       🟡 ★札が 増えない★（20秒 待った）＝この先は 当てに ならない');
+      await machi(400);
+    }
   const IDX = await pg.evaluate(() => {
     const c = Array.from(document.querySelectorAll('#emp-list .mco'));
     return c.length ? c[c.length - 1].getAttribute('data-i') : null;
@@ -264,4 +295,15 @@ try {
   srv.close();
 }
 console.log('\n' + pass + ' passed, ' + fail + ' failed, ' + mi + ' ★未測定★');
+/* ★本当の 判じは 倉庫★＝画面の 数では ない */
+{
+  const kesu = await GOMI_KESU(HAJIME);      /* ★この回で 出た 孤児だけ★ */
+  if (!kesu.ok) console.log('       🟡 この回の 明細を 消せなかった … ' + kesu.naze);
+  const sou = await AWASERU(soukoMae, 20);
+  if (sou.han === '環境') console.log('  ' + sou.iu);   /* ★緑で 通すが 数は 出す★（総なめが 拾う 字） */
+  else if (sou.han === '未測定') { mi++; console.log('  🟡 ★未測定★ 後始末を 倉庫で 数えられない … ' + sou.iu); }
+  else if (sou.han === '緑') { pass++; console.log('  ✓ ★後始末＝★倉庫の 行数★が 元に 戻った'); }
+  else { fail++; console.log('  ✗ ★後始末＝★倉庫の 行数★が 元に 戻った — ' + sou.iu); }
+}
+console.log(String.fromCharCode(10) + '★締め★ ' + pass + ' passed, ' + fail + ' failed, ' + mi + ' はかれない');
 process.exit(fail ? 1 : 0);
