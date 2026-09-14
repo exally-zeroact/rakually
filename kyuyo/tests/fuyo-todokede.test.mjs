@@ -176,8 +176,11 @@ t('⑧ ★1件でも 合わなければ 1バイトも 作らない★', () => {
 t('⑧-2 材料が 足りない時に「出せます」と 言わない（dasuKaFuyo）', () => {
   eq(T.dasuKaFuyo({}).ok, false, '空でも 出せると 言っている');
   ok(T.dasuKaFuyo({}).naze.length >= 3, '理由を 出していない');
-  eq(T.dasuKaFuyo({ emp: EMP, idou: '1', sonota: [KO] }).ok, true, 'そろっているのに 止めている');
-  eq(T.dasuKaFuyo({ emp: EMP, idou: '1', sonota: [KO, KO, KO] }).ok, false, '★1枚に 3人は 入らない★');
+  /* ★2026-09-14 ここを 直した★＝前は ★事業所を 渡さずに「出せる」を 期待していた★。
+     門を 本物の 検め（139項目の 相関）に 繋いだら ★項番2・3・4（都道府県・郡市区・事業所記号）が 無い★と 出た。
+     ★門の 言い分が 正しい★（事業所が 無ければ 出せない）＝試験の 期待の 方が 甘かった。 */
+  eq(T.dasuKaFuyo({ jimusho: JIM, emp: EMP, idou: '1', ukeYmd: '2026-09-08', sonota: [KO], kyou: '2026-09-08' }).ok, true, 'そろっているのに 止めている');
+  eq(T.dasuKaFuyo({ jimusho: JIM, emp: EMP, idou: '1', ukeYmd: '2026-09-08', sonota: [KO, KO, KO], kyou: '2026-09-08' }).ok, false, '★1枚に 3人は 入らない★');
 });
 
 t('⑧-3 ★「出せます」と 言ったなら 本当に 出る★（ボタンと 門の 口裏を 合わせる）', () => {
@@ -247,4 +250,77 @@ t('⑨ ★わざと 壊すと 赤が 出る★（壊した数 と 赤の数 を 
 });
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
+/* ── ⑥ ★減った（非該当）・変わった（変更）も 出せる★（2026-09-14 に 画面を 足した） ──
+   それまでは ★増えた（該当）しか 出せなかった★＝土台は 3つとも 作れたのに 画面が 無かった。
+   ★何を 省略し 何を 要求するかは 私が 決めない★＝lib/todokede-check.js（年金機構の 写し）が 言う物に 従う。
+   実際に 3通りの 行を 作って 通し、★何番が 何と 言われたか★を 見てから 直した（当て推量 0）。 */
+const HAI2 = Object.assign({}, HAI, { yametaYmd: '2026-08-31', yametaRiyu: '3', bikou: '住所変更（旧：東京都杉並区高井戸西３－５－２３）' });
+const KO2 = Object.assign({}, KO, { yametaYmd: '2026-08-31', yametaRiyu: '2', bikou: '氏名変更（旧：年金' + Z + '一朗）' });
+
+t('⑥ 異動の別 3通りとも ★検めが 0件★（増えた／減った／変わった）', () => {
+  ['1', '2', '3'].forEach((ido) => {
+    const inp = Object.assign({}, MARU, { idou: ido, hai: HAI2, sonota: [KO2] });
+    const ng = C.fuyo(T.fuyoRow(inp), '2026-09-08');
+    eq(ng.length, 0, '異動の別 ' + ido + ' で 赤' + NL + '     '
+      + ng.map((x) => '項番' + x.no + ' ' + x.name + '＝' + x.why).join(NL + '     '));
+  });
+});
+
+t('⑥ ★ボタンと 門の 口裏が 合う★（3通りとも）', () => {
+  ['1', '2', '3'].forEach((ido) => {
+    const inp = Object.assign({}, MARU, { idou: ido, hai: HAI2, sonota: [KO2] });
+    const g = T.dasuKaFuyo(inp);
+    ok(g.ok, '異動の別 ' + ido + ' で 門が 止めた: ' + g.naze.join(' / '));
+    eq(C.fuyo(T.fuyoRow(inp), '2026-09-08').length, 0, '異動の別 ' + ido);
+  });
+});
+
+t('⑥ ★異動ごとに 足りない物だけ 止める★（要らない物は 求めない）', () => {
+  [['1', 'nattaYmd'], ['1', 'nattaRiyu'], ['2', 'yametaYmd'], ['2', 'yametaRiyu'], ['3', 'bikou']]
+    .forEach((pair) => {
+      const ido = pair[0], f = pair[1];
+      const ko = Object.assign({}, KO2); delete ko[f];
+      const inp = Object.assign({}, MARU, { idou: ido, hai: HAI2, sonota: [ko] });
+      ok(!T.dasuKaFuyo(inp).ok, '異動 ' + ido + ' で ' + f + ' が 無いのに「出せる」と 言った');
+    });
+  /* ★狼少年に しない★＝減った時に「入った日／理由」は 要らない */
+  const ko2 = Object.assign({}, KO2); delete ko2.nattaYmd; delete ko2.nattaRiyu;
+  const inp2 = Object.assign({}, MARU, { idou: '2', hai: HAI2, sonota: [ko2] });
+  ok(T.dasuKaFuyo(inp2).ok, '減った時に 要らない物を 求めた: ' + T.dasuKaFuyo(inp2).naze.join(' / '));
+});
+
+/* ── ⑦ ★場合ごとに 聞く欄が 変わる★（2026-09-14 司さん「分かりやすくして」） ──
+   前は ★「減った」を 選んでいるのに「扶養に入った理由」が 出たまま★で 矛盾して 見えた。
+   ★どの場合に 何が 要るかは 実測で 出した★＝欄を 1つずつ 欠けさせて 門に 聞いた。
+   ★出ない物を 求めない＝狼少年に しない★（職業・年間収入・同居別居は 2/3 では 紙に 出ない）。 */
+t('⑦ ★増えた時だけ★ 職業・年間収入・同居別居を 求める', () => {
+  const HAI3 = Object.assign({}, HAI, { yametaYmd: '2026-08-31', yametaRiyu: '3', bikou: '住所変更' });
+  ['shokugyo', 'shunyu', 'doukyo'].forEach((f) => {
+    const naku = (x) => { const y = Object.assign({}, x); if (f === 'doukyo') y.doukyo = null; else if (f === 'shunyu') y.shunyu = ''; else delete y[f]; return y; };
+    /* 増えた … 無いと 出せない */
+    ok(!T.dasuKaFuyo(Object.assign({}, MARU, { idou: '1', hai: HAI3, sonota: [naku(KO)] })).ok,
+      '増えた で ' + f + ' が 無いのに 出せると 言った');
+    /* 減った・変わった … 無くても 出せる（紙に 出ないので 聞かない） */
+    ['2', '3'].forEach((ido) => {
+      const ko = naku(Object.assign({}, KO, { yametaYmd: '2026-08-31', yametaRiyu: '2', bikou: '氏名変更' }));
+      const g = T.dasuKaFuyo(Object.assign({}, MARU, { idou: ido, hai: HAI3, sonota: [ko] }));
+      ok(g.ok, '異動 ' + ido + ' で ' + f + ' を 求めた（紙に 出ないのに）: ' + g.naze.join(' / '));
+    });
+  });
+});
+
+t('⑦ ★画面も 場合ごとに 出し分ける★（app.js の 中身を 見る）', () => {
+  const APP = require_('node:fs').readFileSync(path.join(ROOT, 'kyuyo/js/app.js'), 'utf8');
+  /* 増えた の かたまりの 中だけに 在る事を 見る（字の 並びで 確かめる） */
+  const i = APP.indexOf('今回は どれですか');
+  ok(i > 0, '★届出の 問いが 無い★');
+  const ato = APP.slice(i, i + 2600);
+  ok(ato.indexOf("=== '1'") > 0, '増えた の 時だけ 出す 作りに なっていない');
+  ok(ato.indexOf('扶養に入った理由') > 0, '入った理由が 増えた の かたまりに 無い');
+  ok(ato.indexOf("=== '2'") > 0, '減った の かたまりが 無い');
+  ok(ato.indexOf('扶養から 外れた日') > 0, '外れた日が 無い');
+  ok(ato.indexOf("=== '3'") > 0, '変わった の かたまりが 無い');
+  ok(ato.indexOf('何を 変えたか') > 0, '何を 変えたか が 無い');
+});
+
 process.exit(fail ? 1 : 0);
