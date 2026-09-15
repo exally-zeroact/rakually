@@ -367,7 +367,23 @@
   function curYm(){ var d=new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2); }
   var state={ company: defCompany(),
     month:curYm(), prefer:'col2_1', theme:{accent:'#6f5a3e',line:'#cfc9b8',ink:'#23261f'}, depts:['営業部'], roles:['課長','主任','一般'],
-    employees:[defEmp('従業員 1')], open:{},
+    /* ★★初めから 1人 入れない（2026-09-15）★★
+       ★ここが 幻の『従業員 1』の 種★＝ログインの 直後、読み込みが 着く 前に
+       ★この 1人が 倉庫へ 書かれ★、後から 本物が 着いて 消える
+       ⇒ ★書かれた 明細だけ 持ち主を 失う（孤児）★。
+       数えた … 試験 孤児 3,716行／★本番 明細 12行中 9行★（＝過去に 起きている）。
+       ★これは「新しく 決める」では なく ★元の 形に 戻す★★＝
+         ★0人の 画面は 元から 作り込まれていた★（実測・絵で 見た）:
+           「まだ 人がいません」「1人ずつ 聞いていきます（7問）」「★1人目を足す★」
+           ＋「＋ 従業員を追加」「他ソフトから移行」
+         ＝★誰かが 0人を 想定して 作っていた／既定で 1人 入れる 方が 食い違っていた★。
+       ★次の 人へ★＝★ここに 1人 戻さないで ください★（戻すと 孤児が また 増えます）。
+       ★測った★ … 総なめ ci.yml 225本 ★赤0★／倉庫まわり 19本 緑／
+                  ★0人で undefined に なる 道 0か所★（employees[0] は 全部 守られている）／
+                  ★幻が 生まれた 数 15分で 0行★（今朝までは ★1分に 5件★）。
+       ★種は ここ 1か所だけ★（defEmp を 呼ぶ 7か所を 1つずつ 読んだ）。
+       ★322 の 既定名★は ★x に name が 無い時だけ 残る★＝mergeEmp の 道＝新しい 幻は 作らない。 */
+    employees:[], open:{},
     inputMode:'monthly', printMode:'monthly', empFilter:'active', bonus:{ payYm:'', payDay:'', byEmp:{} }, confirmed:{}, nencho:{}, onboardDone:false, onboardOutput:false, payPatterns:[], dailySlipLayout:'1col', inputView:'card' };
 
   function carCommuteNonTax(km){ return PM().carCommuteNonTax(km); }
@@ -570,11 +586,31 @@
   // はじめかたガイドの各ステップの達成判定(freee/MF流のライブToDo)。全完了で自動的に消える。
   function onboardSteps(){
     var emps=state.employees||[];
-    var realEmp=emps.length>1 || emps.some(function(e){ return e.name && !/^(山田 太郎|日払 太郎)$/.test(String(e.name).trim()); });
+    /* ★★はじめかたガイドの 判じ（2026-09-15）★★
+       ★初めから 0人★に したので「1人でも 居れば 済み」で よいと 一度 書いたが、
+       ★総なめが 赤に して 止めた★（integration.mjs「★サンプルのみ→②未完★」）。
+       ★試験の 方が 正しい★＝★見本の 名前のままでは「済み」に しない★
+         ＝会社名も 同じ 決め（既定の 見本のままなら ①も 未完）＝★対称★。
+       ⇒ ★0人なら 未完★（前は length>1 で 0人の 時に 誤って 済みに なり得た）
+         ＋★見本の 名前だけの 時も 未完★（＝元の 決めを 残す）。
+       ★★この 2つの 名前は 今 どこからも 作られていない（2026-09-15 数えた）★★
+         ・作る所 … ★0か所★（defEmp の 既定名は 322 の『★従業員 1★』）
+         ・持つ所 … ★2か所だけ★＝ここ（判じ）と 1636（placeholder・『山田 太郎』のみ）
+         ・移行（buildEmpFromRow 2219）は ★row.name を 渡すだけ★＝★見本の 名前は 持たない★
+           （★私が 一度「移行でも 使う」と 書いたのは 誤り★＝字を 確かめずに 書いた）
+         ⇒ ★昔の 見本を 指したまま＝今の 既定名と 既に ずれている★。
+         ★2026-09-15 に 初期値を 0人に した★ので ★既定名の 人も もう 生まれない★。
+       ★ここを 触ると 総なめが 赤に なる★
+         ＝integration.mjs「★サンプルのみ→②未完★」／★名前を 外すだけの 直しは しない★
+         ＝★直すなら「サンプルのままでは 済みに しない」を 別の 見分け方で★（例＝中身が 空か）
+       ★本番に この 名前の 人が 1人 居る（2026-09-15 実測・読むだけ）★
+         ＝★中身は 空の 殻★（生年月日が ひな型のまま／カナ・入社日・年金番号・郵便番号 無し）
+         ＝★見本の 残り＝客の 害では ない★。★消していない★。 */
+    var realEmp=emps.some(function(e){ return e.name && !/^(山田 太郎|日払 太郎)$/.test(String(e.name).trim()); });
     var conf=state.confirmed&&state.confirmed[state.month]; var inputDone=!!(conf&&Object.keys(conf).length);
     return [
       { done: !!(state.company&&String(state.company.name||'').trim() && !/^合同会社Rakunally$/.test(String(state.company.name).trim())), label:'会社情報を入れる', sub:'設定▸会社情報 の「会社の情報を直す」から（会社の設定で1か所）', go:'company' },
-      { done: realEmp, label:'従業員を追加する', sub:'サンプルの山田太郎は書き換え/削除でOK', go:'emp' },
+      { done: realEmp, label:'従業員を追加する', sub:'「1人目を足す」から 7問に 答えるだけ', go:'emp' },   /* ★居ない人（サンプルの山田太郎）を 指さない★＝0人から 始まる為 */
       { done: inputDone, label:'当月を入力して確認', sub:'勤怠を入れて「今月を確定」', go:'input' },
       { done: !!state.onboardOutput, label:'明細を出力する', sub:'PDF/Web明細/Excel/振込データ', go:'print' }
     ];
@@ -5255,6 +5291,39 @@
 
     // 従業員マスタ操作
     var el=$('#emp-list');
+  /* ★★従業員を 消すのは ここ 1か所★★（2026-09-15 司さん「いらん従業員なら 消せや 倉庫に 残すな」）
+     ★なぜ 1か所に したか★＝★消す道が 2本 在った★
+       ㋐「この従業員を削除」ボタン（門 3つ・Web明細リンクを 失効・保存する）
+       ㋑★カードを 左にスワイプ★（★門は「最低1名」だけ★）
+     ⇒ ㋑は ★確定した 明細が 在る人も 消せた★（賃金台帳＝労基法108条／2026-08-09 の 決め）
+       ★Web明細の リンクを 失効させず★（＝お金の 紙が 見られる まま 残る）
+       ★保存も 呼ばず★（＝画面から 消えても 倉庫に 残り得る）
+     ⇒ ★片方だけ 直すと もう片方から 同じ事が 起きる★ので ★入口を 1つに した★。
+     ★消す物★ ①名簿から 抜く ②Web明細の リンクを 失効 ③★その人の 給与明細を 倉庫からも 消す★
+     ★③の 訳★＝消せるのは ★確定した 明細が 1か月も 無い人★だけ＝★未確定しか 消えない★。
+       （法で 残す 物＝★確定した★賃金台帳。実測でも 本番の 孤児 9行は ★確定済み 0行★）
+     ★消せたか どうかは 倉庫の 返事で 言う★＝★「消しました」と 言って 消えていない を 作らない★。 */
+  function empKesu(i){
+    var emp=state.employees[i]; if(!emp) return;
+    if(activeEmps().length<=1&&!emp.retired){ uiAlert('稼働中は最低1名必要です'); return; }
+    var cmz=confirmedMonthsOf(emp);
+    if(cmz.length){ uiAlert('この方には確定した給与明細が '+cmz.length+'か月分あります（'+cmz[0]+'〜'+cmz[cmz.length-1]+'）。賃金台帳に必要なので削除できません。辞めた方は「退職にする」を押してください。'); return; }
+    uiConfirm('「'+(emp.name||'この従業員')+'」を削除します。元に戻せません。\n（給与明細を確定したことがない方だけ削除できます）').then(function(ok){
+      if(!ok) return;
+      var id=emp.id, na=(emp.name||'従業員');
+      if(window.Store&&Store.unpublishMeisai){ try{ Store.unpublishMeisai(id); }catch(_){} } // Web明細リンクを失効(docsは物理削除しない・オフラインはno-op)
+      state.employees.splice(i,1); renderEmpMaster(); if(window.persistSaveDebounced)persistSaveDebounced();
+      if(!(window.Store&&Store.deletePayslipsOf)){ toast('「'+na+'」を削除しました。給与明細は消せませんでした（画面を開き直して、もう一度お試しください）'); return; }
+      Store.deletePayslipsOf(id).then(function(r){
+        if(r&&r.ok&&r.souko) toast('「'+na+'」を削除しました（給与明細 '+r.n+'件も消しました）');
+        else if(r&&r.ok) toast('「'+na+'」を削除しました（この端末の給与明細 '+r.n+'件も消しました）');
+        else toast('「'+na+'」を削除しました。給与明細は消せませんでした（'+((r&&r.naze)||'理由不明')+'）。もう一度「削除」を押してください。');
+      }).catch(function(err){
+        toast('「'+na+'」を削除しました。給与明細は消せませんでした（'+((err&&err.message)||'理由不明')+'）。もう一度「削除」を押してください。');
+      });
+    });
+  }
+
     el.addEventListener('click',function(ev){
       if(ev.target.dataset.showret){ state.showRetired=!state.showRetired; renderEmpMaster(); return; }
       var dtg=ev.target.closest('[data-dtoggle]'); if(dtg){ var de=state.employees[+dtg.dataset.dtoggle]; state.open['D'+de.id]=!state.open['D'+de.id]; renderEmpMaster(); return; } // 詳細設定の開閉
@@ -5316,17 +5385,7 @@
       var prta=ev.target.closest('[data-prtieradd]'); if(prta){ var _tp=ensurePayRule(emp).variable.parts[+String(prta.dataset.prtieradd).split(':')[1]]; if(_tp){ if(!_tp.tiers||!_tp.tiers.length)_tp.tiers=[{from:0,rate:''}]; _tp.tiers.push({from:'',rate:''}); } renderEmpMaster(); return; } // 段追加
       var prtd=ev.target.closest('[data-prtierdel]'); if(prtd){ var _pp=String(prtd.dataset.prtierdel).split(':'); var _tp2=ensurePayRule(emp).variable.parts[+_pp[1]]; if(_tp2&&_tp2.tiers)_tp2.tiers.splice(+_pp[2],1); renderEmpMaster(); return; } // 段削除
       if(ev.target.classList.contains('m-retire')){ if(!emp.retired){ uiConfirm((emp.name||'この従業員')+' を退職にします。給与計算・印刷の対象から外れます（データは残ります）。').then(function(ok){ if(!ok)return; emp.retired=true; emp.retiredYmd=state.month; state.open[emp.id]=false; renderEmpMaster(); }); } else { emp.retired=false; renderEmpMaster(); } return; }
-      if(ev.target.classList.contains('m-del-emp')){ if(activeEmps().length<=1&&!emp.retired){uiAlert('稼働中は最低1名必要です');return;}
-        /* ★確定した給与明細がある人は消させない（画面が壊れても消えないよう、ここでも見る）★ */
-        var cmz=confirmedMonthsOf(emp);
-        if(cmz.length){ uiAlert('この方には確定した給与明細が '+cmz.length+'か月分あります（'+cmz[0]+'〜'+cmz[cmz.length-1]+'）。賃金台帳に必要なので削除できません。辞めた方は「退職にする」を押してください。'); return; }
-        // ★戻せない操作なので確認を1枚 挟む★
-        /* ★の記号は私たちの覚え書き用。客の画面には出さない（押して気づいた） */
-        uiConfirm('「'+(emp.name||'この従業員')+'」を削除します。元に戻せません。\n（給与明細を確定したことがない方だけ削除できます）').then(function(ok){
-          if(!ok) return;
-          if(window.Store&&Store.unpublishMeisai){ try{ Store.unpublishMeisai(emp.id); }catch(_){} } // 削除=Web明細リンクを失効(docsは物理削除しない・オフラインはno-op)
-          state.employees.splice(i,1); renderEmpMaster(); if(window.persistSaveDebounced)persistSaveDebounced(); toast('「'+(emp.name||'従業員')+'」を削除しました');
-        }); return; }
+      if(ev.target.classList.contains('m-del-emp')){ empKesu(i); return; }
     });
     el.addEventListener('change',function(ev){
       var card=ev.target.closest('.mco'); if(!card)return; var i=+card.dataset.i; var emp=state.employees[i];
@@ -5396,7 +5455,7 @@
     var swX=0,swY=0,swCard=null;
     el.addEventListener('touchstart',function(ev){ swCard=ev.target.closest('.mco'); if(swCard){ swX=ev.touches[0].clientX; swY=ev.touches[0].clientY; } },{passive:true});
     el.addEventListener('touchend',function(ev){ if(!swCard)return; var c=swCard; swCard=null; var dx=ev.changedTouches[0].clientX-swX, dy=ev.changedTouches[0].clientY-swY;
-      if(dx<-60 && Math.abs(dy)<40){ var i=+c.dataset.i, e=state.employees[i]; if(state.employees.length<=1){ uiAlert('最低1名は必要です'); return; } uiConfirm((e&&e.name||'この従業員')+' を削除しますか？').then(function(ok){ if(ok){ state.employees.splice(i,1); renderEmpMaster(); } }); } });
+      if(dx<-60 && Math.abs(dy)<40){ empKesu(+c.dataset.i); } });   /* ★ボタンと 同じ 1か所を 通す★＝門も 後始末も 同じ */
 
     // 入力 accordion
     var il=$('#input-list');

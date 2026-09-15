@@ -15,7 +15,7 @@ function ok(c, m) { if (!c) throw new Error(m || 'expected truthy'); }
 // ── Supabaseモック(呼び出しを記録・失敗も注入できる) ──
 function makeMock(opts) {
   opts = opts || {};
-  const calls = { companyUpsert: [], empUpsert: [], deletes: [], selects: [] };
+  const calls = { companyUpsert: [], empUpsert: [], deletes: [], selects: [], slipUpsert: [] };
   let serverEmpIds = (opts.serverEmpIds || []).slice();
   // dbFormatモード=実Postgres(timestamptz)を模擬: 送られたISO(…Z)を保存時に…+00:00へ書式変換し、読み戻しはその値を返す。
   //  ＝JS生成文字列(…Z)を競合基準にすると読み戻し(…+00:00)と毎回不一致になる本番バグを再現する。
@@ -58,7 +58,9 @@ function makeMock(opts) {
   function from(table) {
     return {
       upsert: (d) => {
-        (table === 'pay_companies' ? calls.companyUpsert : calls.empUpsert).push(d);
+        /* ★明細の 書き込みも 数える★（2026-09-15＝孤児の 元を 縛る為） */
+        (table === 'pay_companies' ? calls.companyUpsert
+          : table === 'pay_payslips' ? calls.slipUpsert : calls.empUpsert).push(d);
         let retUA = null;
         if (table === 'pay_companies' && d && d.updated_at != null) { retUA = dbFmt(d.updated_at); if (opts.dbFormat) storedUA = retUA; }
         const res = { error: opts.failUpsert ? { message: 'upsert失敗' } : null, data: retUA != null ? { updated_at: retUA } : null };
@@ -278,6 +280,65 @@ runs.push(T('K4 getLedger: エラー時は空+error(嘘の空集計を返さな�
   ok(r.error === 'permission denied', 'errorを載せる: ' + r.error);
   ok(r.truncated === false, 'エラー時 truncated:false');
 }));
+
+
+/* ★★この 3本は「壊して 赤」まで 見た（2026-09-15）★★
+   ★壊した 形を そのまま 残す★＝次に 書き直す 人が ★何を 守っていたか★を 読める:
+     ①… store.js の ★if(saveHold) → if(false)★        ⇒ 19 passed, 1 failed（赤は ①だけ）
+     ②… store.js の ★if(!iru) → if(true)★              ⇒ 19 passed, 1 failed（赤は ②だけ）
+     ③… 保留が 無い道の return を ★{ok:false} に 差替え★ ⇒ 19 passed, 1 failed（赤は ③だけ）
+   ★1本ずつ 壊した★（まとめて 壊すと どれが どれを 守ったか 分からない）／
+   ★赤は 毎回 1本だけ★（重なっていない）／★戻して 全部 緑★まで 見た。 */
+
+/* ★★P0-maboroshi: 明細の 保存も 読み込みを 待つ（2026-09-15）★★
+   ★見つけた 害★＝ログインの 直後、state は まだ ★初期値の『従業員 1』1人★。
+     そこで 保存が 走ると ★明細だけ 待たずに 書かれ★、後から 読み込みが 着いて
+     その人が 消える ⇒ ★書かれた 明細が 持ち主を 失う（孤児）★。
+     数えた … 試験の 倉庫 ★孤児 3,599行★／★本番 明細 12行中 9行が 孤児★。
+   ★保存の 入口は 2本★＝(a) cloudSaveState（2026-09-03 から 保留）／(b) savePayslip（★素通りだった★）。
+   ★字では 縛らない★（「saveHold の 字が 在るか」では また 素通りする）＝★動きで 縛る★。 */
+runs.push(T('P0-maboroshi①: ★読み込み中に 書いた 明細は 倉庫に 書かれない★（幻の人）', async function () {
+  const mock = makeMock({ loadDelay: 60, serverEmps: [{ data: { id: 'e9', name: '本物' } }] });
+  const Store = loadStore(mock);
+  Store.setSnapshotFn(() => ({ employees: [{ id: 'e9', name: '本物' }] }));   /* 読み込み後の 姿 */
+  const yomi = Store.cloudLoadState();                       /* ★読み込みを 始める＝保留が 立つ★ */
+  const r = await Store.savePayslip('2026-06', 'maboroshi1', { name: '従業員 1' });
+  await yomi;
+  ok(mock.__calls.slipUpsert.length === 0, '★幻の人の 明細が 書かれてしまった★');
+  ok(r && r.reason === 'held-skipped-maboroshi', '★書かなかった 訳を 言っていない★（出たのは ' + JSON.stringify(r) + '）');
+}));
+
+runs.push(T('P0-maboroshi②: ★読み込み後に 居る人の 明細は ちゃんと 書かれる★（本物を 落とさない）', async function () {
+  const mock = makeMock({ loadDelay: 60, serverEmps: [{ data: { id: 'e9', name: '本物' } }] });
+  const Store = loadStore(mock);
+  Store.setSnapshotFn(() => ({ employees: [{ id: 'e9', name: '本物' }] }));
+  const yomi = Store.cloudLoadState();
+  await Store.savePayslip('2026-06', 'e9', { name: '本物' });
+  await yomi;
+  ok(mock.__calls.slipUpsert.length === 1, '★本物の 明細が 書かれていない★（' + mock.__calls.slipUpsert.length + '件）');
+  ok(mock.__calls.slipUpsert[0].employee_id === 'e9', '★別の人を 書いている★');
+}));
+
+runs.push(T('P0-maboroshi③: ★読み込みを していない時は そのまま 書く★（消す より 安全側）', async function () {
+  const mock = makeMock({});
+  const Store = loadStore(mock);
+  await Store.savePayslip('2026-06', 'e1', { name: '山田' });
+  ok(mock.__calls.slipUpsert.length === 1, '★保留が 無いのに 書かれていない★');
+}));
+
+/* ★★④は 書いたが ★消しました★（2026-09-15）＝★守る物が 無かった★★★
+   書いた物 … 「読み込みが 失敗しても 保留は 解ける（永久に 待たない）」
+   ★壊しても 緑のままだった★＝★見張りに なっていなかった★。
+   ★訳を 2つ 立てて 実際に 走らせて 決めた★（★前提で 決めない★）:
+     ㋒ 済んだ 約束が 残るだけ … 次の 保存は すぐ 解ける＝★客には 何も 起きない★
+     ㋓ 失敗した 約束が 残る   … その後の 保存が 全部 失敗の 道＝★明細が 二度と 保存されない★
+   ★測った★＝store.js の 解きを わざと 外し、★読み込みを 失敗させた 後に もう 1回 保存★:
+     ⇒ ★「おわった」／倉庫に 書いた回数 1★＝★客の 明細は ちゃんと 書かれる★＝★㋒★
+   ⇒ ★守る 物が 無い＝消す★。★緑の 顔を した 見張りを 残すと「4本 守られている」と 思わせる★。
+   ★次に 同じ物を 書きたくなった 人へ★＝
+     ★saveHold を null に 戻すかは 客には 出ません★（約束そのものは 必ず 済む）。
+     ★見張りは 客に 起きる 事で 縛る★＝中の 変数の 姿では 縛らない。
+   ★保留が「1回だけ 出る」事は 別の 試験が 既に 見ています★＝★P0-race②★（この 上に 在る）。 */
 
 await Promise.all(runs);
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
