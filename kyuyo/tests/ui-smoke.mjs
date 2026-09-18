@@ -47,18 +47,24 @@ const OSANAI_JI = [
   { ji: '印刷',        naze: '印刷ダイアログが 開く' },
   { ji: '公開',        naze: '★従業員の Web明細に 公開される★（客に 出る）' },
   { ji: 'webpub',     naze: '★Web明細の 公開★（同上・印の 側）' },
-  { ji: 'dl-',        naze: 'ファイルを 落とす' },
-  { ji: 'csvimport',  naze: 'CSV を 取り込む（中身が 書き換わる）' },
   { ji: '従業員を削除', naze: '★人が 消える★（戻せない）' },
   { ji: 'この従業員',   naze: '★人が 消える★（確認の 言い回し）' },
 ];
 const OSANAI_SHIRUSHI = [
-  { na: 'data-link',    naze: '外へ 出る リンク' },
-  { na: 'data-webpub',  naze: '★Web明細の 公開★' },
-  { na: 'data-del-emp', naze: '★人が 消える★' },
+  { na: 'data-csvimport', naze: '★CSV を 取り込む＝中身が 書き換わる★'
+    + '（2026-09-18 … 前は 字「csvimport」で 外して いたが ★実物は 印 `data-csvimport` で id も 字も 持たない★'
+    + '＝★1個 在るのに 押されて いた★＝★守って いる つもりで 守れて いなかった★）' },
+  { na: 'data-link',    naze: '外へ 出る リンク（★Web明細の リンクを 写す ボタン★＝app.js:5901）'
+    + '／★実物は 在るが この 試験は まだ 届いて いない★＝★届いた 日に 効く★ので 残す' },
   { na: 'class m-del-emp/del-emp', naze: '★人が 消える★（札の 削除ボタン）' },
 ];
-const OSANAI_HONSU = 12, OSANAI_SHIRUSHI_HONSU = 4;   /* ★超えたら 赤★ */
+const OSANAI_HONSU = 10, OSANAI_SHIRUSHI_HONSU = 3;   /* ★超えたら 赤★ */
+/* ★★外した 2本（`dl-`／`data-webpub`／`data-del-emp`）★★（2026-09-18 実測で 外した）
+     `dl-`        … ★`datalist` の id★（app.js:229/234）＝★ボタンでは ない★／5画面・札を 開いた 状態で ★0個★
+     `data-webpub`… ★アプリ全体に 0件★（実物は `#b-webpub`＝字「公開」で 当たって いる）
+     `data-del-emp`… ★アプリ全体に 0件★（実物は `class="m-del-emp"`＝下の 印で 当たって いる）
+   ⇒ ★当てずっぽうで 書いた 名前の 免除★＝★守って いる つもりで 何も 守って いない★
+   ⇒ ★外して 同じ 結果が 出るかを 測ってから 外した★（[[feedback_menjo_no_wake_wa_hazushite_hakaru_made_mitate]]） */
 /* ★どの 免除が 何回 効いたか★＝★使われて いない 免除★を 見つける為（黙って 残さない） */
 const OSANAI_KAZU = {};
 function atatta(k) { OSANAI_KAZU[k] = (OSANAI_KAZU[k] || 0) + 1; return true; }
@@ -70,18 +76,104 @@ function denied(el) {
     const j = m.ji.toLowerCase();
     if (id.toLowerCase().indexOf(j) >= 0 || t.toLowerCase().indexOf(j) >= 0) return atatta(m.ji);
   }
+  if (el.hasAttribute('data-csvimport')) return atatta('data-csvimport');
   if (el.getAttribute('data-link')) return atatta('data-link');
-  if (el.getAttribute('data-webpub')) return atatta('data-webpub');
-  if (el.hasAttribute('data-del-emp')) return atatta('data-del-emp');
   if (el.className && /m-del-emp|del-emp/.test(el.className)) return atatta('class m-del-emp/del-emp');
   return false;
 }
 
 console.log('\n[ui-smoke] 全ボタンUI検証(jsdom)');
 
+/* ★★押す前に 札（従業員カード）を 開く★★（2026-09-18 に 足した）
+   ★何が 分かったか★
+     押す段（下の『全タブ→全ボタン』）は ★札が 畳まれた ままの DOM★を 数えて いた。
+     札を 開く 字は ★ずっと 後ろ（別の 段）★に しか 無かった。
+     ⇒ ★畳んだ 中の ボタンは そもそも DOM に 居ない★＝★押しても いないし 免除も 効かない★
+     ⇒ 免除 16本の うち ★1回も 効かない 物が 9本★（うち ★削除まわり 3本★）
+        ＝★『免除が 守って いる』のでは なく『届いて いない』★
+     ⇒ 今日 追いかけた 欠陥は ★全部 削除の 周り★（鍵が 残る／紙が 道連れ／確定が 巻き込まれる）
+        ＝★一番 危ない 所に 試験が 届いて いなかった★
+   ★これを 入れると 押す 数が 変わります★＝★前の「押した 60／外した 6」は ★意味を 失います★★。 */
+A.state.open = A.state.open || {};
+let fudaAketa = 0;
+A.state.employees.forEach(function (e) {
+  A.state.open[e.id] = true;            // 札
+  A.state.open['D' + e.id] = true;      // 詳細設定（削除ボタンは この 中）
+  fudaAketa++;
+});
+/* ★分母つきで 出す★＝★「2枚」だけでは 全部か 一部か 決められない★（指示役1 2026-09-18） */
+console.log('  ★札を 開いた … ' + fudaAketa + '枚／' + A.state.employees.length + '枚★'
+  + '（前は 0枚＝畳んだ ままで 数えて いた／★この紙は 倉庫では なく 自分で 置いた 見本の 人を 使う★）');
+T('★札は 全部 開いた（分母つき・開き残しが 無い）', function () {
+  ok(fudaAketa === A.state.employees.length,
+    '★開いた ' + fudaAketa + '枚／居る ' + A.state.employees.length + '枚★＝★開き残しが 在る＝まだ 届いて いない★');
+});
+
+/* ★★先に「免除が 効く」事を 1回 確かめる★★
+   ★訳★＝札が 開くと ★削除の ボタンが 初めて DOM に 出る★。
+     ★そこで 免除が 効かなければ ★本当に 押して しまう★★（人が 消える）。
+   ⇒ ★全部を 押す 前に ここで 止める★。 */
+T('★押す前の 門＝削除の ボタンが 出て いて、しかも 押さない 側に 入る', function () {
+  const q = s => doc.querySelector(s), qa = s => [...doc.querySelectorAll(s)];
+  q('.bn[data-scr="scr-settings"]').click();
+  const seg = q('#set-seg .seg-b[data-set="emp"]'); if (seg) seg.click();
+  const del = qa('#scr-settings button').filter(function (b) {
+    return /m-del-emp|del-emp/.test(b.className || '') || /従業員を削除|この従業員/.test(b.textContent || '');
+  });
+  ok(del.length > 0, '★札を 開いても 削除の ボタンが 出て こない★＝開け方が 効いて いない');
+  const nogare = del.filter(function (b) { return denied(b); });
+  ok(nogare.length === del.length,
+    '★削除の ボタンが 押される側に 居る★＝' + nogare.length + '/' + del.length
+    + '＝★このまま 全部 押したら 人が 消えます★');
+  console.log('     削除の ボタン ' + del.length + '個 … ★全部 押さない側★');
+});
+
+/* ★★危ない 印を 持つ ボタンは 全部 押さない側に 居る★★（2026-09-18 に 足した）
+   ★訳★＝★守りを 外しても 赤に ならなかった★（実測）＝★黙って 押されるだけ★
+     `data-csvimport` の 守りを 外して 走らせたら ★押した 65 → 66 に 増えて、それでも 47 passed★。
+     ⇒ ★「押さない はず」が 破れた 事を 誰も 言わない★＝★守って いる つもり★の 出来上がり。
+   ⇒ ★印を 名指しで 並べ、1個ずつ「押さない側か」を 見る★＝★外した 日に 赤に なる★。 */
+const ABUNAI_SHIRUSHI = ['data-csvimport', 'data-link', 'data-webpub', 'data-del-emp'];
+T('★危ない 印を 持つ ボタンは 全部 押さない側に 居る（守りを 外したら 赤）', function () {
+  const qa = s => [...doc.querySelectorAll(s)];
+  let mita = 0, more = 0;
+  const dame = [];
+  /* ★SCREENS は この 下で 作る★ので ここでは ★画面の 札を その場で 読む★（同じ 物・名前を 手で 並べない） */
+  const gamen = qa('.bn[data-scr]').map(b => b.getAttribute('data-scr'));
+  for (const scr of gamen) {
+    const tab = doc.querySelector('.bn[data-scr="' + scr + '"]'); if (tab) tab.click();
+    for (const b of qa('#' + scr + ' button')) {
+      for (const sh of ABUNAI_SHIRUSHI) {
+        if (!b.hasAttribute(sh)) continue;
+        mita++;
+        if (!denied(b)) dame.push(scr + ' ' + sh + ' 「' + (b.textContent || '').slice(0, 12) + '」');
+      }
+    }
+    more++;
+  }
+  console.log('     危ない 印の ボタン … ★' + mita + '個★（見た 画面 ' + more + 'つ）'
+    + (mita ? '' : '（★0個＝この回は 何も 守って いない★）'));
+  ok(dame.length === 0, '★押される側に 居る★ … ' + dame.join(' / '));
+});
+
 // ── 各画面を開いて、その画面の全ボタンをクリック(例外0) ──
-const SCREENS = ['scr-settings', 'scr-input', 'scr-list', 'scr-print'];
+/* ★★画面は 5つ（4つでは 足りなかった）★★（2026-09-18 実測）
+   ★『全ボタンUI検証』と 名乗って いて ★画面が 1つ 抜けて いた★★
+     実物（kyuyo/index.html の `data-scr`）… scr-settings / scr-input / scr-list / scr-print / ★scr-furikomi★
+     この紙        … ★4つ★（`scr-furikomi`＝振込 が 無い）
+   ⇒ ★全銀（総合振込データ）の ボタンに 1度も 届いて いなかった★＝免除「全銀」が 0回だった 訳。
+   ★見る 範囲を 先に 数えて 書く★（[[feedback_mihari_no_miru_hanni_wo_saki_ni_kazoero]]）
+   ＝★名前を 手で 並べる のを やめ、★画面の 札から 読む★★＝★画面が 増えた 日に 勝手に 入る★。
+   ★本数は 決め打つ★＝★黙って 減っても 気づく★。 */
+const SCREENS = [...doc.querySelectorAll('.bn[data-scr]')].map(b => b.getAttribute('data-scr'));
+const SCREENS_HONSU = 5;
 let clicked = 0, skipped = 0;
+console.log('  ★見る 画面 … ' + SCREENS.length + 'つ★（決め打ち ' + SCREENS_HONSU + '）… ' + SCREENS.join(' / '));
+T('★見る 画面の 数が 決め打ちと 合う（画面が 増減したら 赤）', function () {
+  ok(SCREENS.length === SCREENS_HONSU,
+    '★画面 ' + SCREENS.length + 'つ／決め打ち ' + SCREENS_HONSU + 'つ★＝'
+    + '★増えたなら この紙の 決め打ちも 直す（＝差分に 出る）／減ったなら 訳を 書く★ … ' + SCREENS.join(' '));
+});
 T('全タブ→全ボタンをクリックしても例外0・各画面が描画', function () {
   const q = s => doc.querySelector(s), qa = s => [...doc.querySelectorAll(s)];
   for (const scr of SCREENS) {

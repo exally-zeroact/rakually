@@ -143,7 +143,7 @@ console.log(NL + '[santei-gekkaku-ui] 算定基礎届／月額変更届を ★�
 
 const { katazukeru: KATAZUKERU } = await import('./_kyaku_no_michi_de_katazukeru.mjs');
 /* ★「前」は ログインの 前に 数える★（ログインした 途端に 幻の『従業員 1』が 倉庫に 書かれる） */
-const { kazoeru: KAZOERU, awaseru: AWASERU, konkaiNoGomiKesu: GOMI_KESU, ima: IMA, sujiKesu: SUJI_KESU, meisaiIdHikaeru: MEISAI_HIKAE, fuetaMeisaiKesu: MEISAI_KESU, kakuteiHikaeru: KAKUTEI_HIKAE, koukaiHikaeru: KOUKAI_HIKAE, kakuteiModosu: KAKUTEI_MODOSU, fuetaKoukaiKesu: KOUKAI_KESU }
+const { kazoeru: KAZOERU, awaseru: AWASERU, konkaiNoGomiKesu: GOMI_KESU, ima: IMA, sujiKesu: SUJI_KESU, meisaiIdHikaeru: MEISAI_HIKAE, fuetaMeisaiKesu: MEISAI_KESU, kakuteiHikaeru: KAKUTEI_HIKAE, koukaiHikaeru: KOUKAI_HIKAE, kakuteiModosu: KAKUTEI_MODOSU, fuetaKoukaiKesu: KOUKAI_KESU, kaishaHikaeru: KAISHA_HIKAE, kaishaModosu: KAISHA_MODOSU }
   = await import('./_souko-kazoeru.mjs');
 /* ★始まりは ★倉庫の 時計★に 聞く★＝手元の 時計から 遡ると
    ★直前の 試験の ゴミまで 窓に 入り、自分が 作っていない 物を 消す★（総なめで 捕まった）。 */
@@ -156,6 +156,9 @@ const HAJIME = await IMA().then((x) => (x.ok ? x.t : new Date(Date.now() - 5000)
         （2026-09-18 実測 … ★確定 4行 → 1行★＝元から 在った 3件を 壊した
           ＝★私の 報告「労働保険 0行／支払調書 0行は 正しい」の 裏取りまで 汚した★）。
    ⇒ ★★控えに 無い 物だけ 元へ 戻す★★＝★前から 在った 物は 触りようが ない★。 */
+/* ★会社の 欄も 控える★＝この試験は `#c-pref` に 打つ（351-353行）が ★戻す 字が 無かった★
+   ⇒ 手元の 総なめ #31 で ★kyuyo.pay_companies の 指紋 ずれ★で 赤に なった。 */
+const KAISHA_MAE = await KAISHA_HIKAE();
 const KAKUTEI_MAE = await KAKUTEI_HIKAE();
 const KOUKAI_MAE = await KOUKAI_HIKAE();
 
@@ -414,10 +417,31 @@ try {
   if (ireta < 3) MI('4〜6月の 確定', '★' + ireta + '/3 か月しか 確定できていない＝算定は 測れません★');
 
   /* ── 算定基礎届 ─────────────────────────────────── */
+  /* ★★時間では なく 数で 待つ★★（2026-09-18 CI が 赤に なって 直した）
+     ★何が 起きたか★
+       CI の WebKit で ★「算定基礎届 … ボタン「（無い）」／押せない null」★＝★押せない のでは なく 描かれて いない★。
+       ★手元は 緑★（14 passed／総なめ 32本でも 赤 0）／★前の 回の CI も 緑★
+       ⇒ ★機械の 速さの 差★＝★描き終わる 前に 見て いた★
+     ★前の 待ち★ … `machi(1600)`＝★決まった 時間★（＋600＋600）
+     ⇒ ★★「揺れ」とは 呼ばない★★＝★どれだけ 足りないかを 測る★（09-15 fuyo-ui は 0.7秒／要 18.2秒＝25倍）
+     ⇒ ★ボタンが 出るまで 待つ（数で 待つ）★＝★機械の 速さに 左右されない★
+     ⇒ ★待った 秒を 出す★＝★次に 見る 人が 比を 出せる★ */
+  const matsuMade = async (id, ue = 20000) => {
+    const t0 = Date.now();
+    for (;;) {
+      const aru = await pg.evaluate((x) => !!document.querySelector(x), id).catch(() => false);
+      if (aru) return { aru: true, byo: ((Date.now() - t0) / 1000).toFixed(1) };
+      if (Date.now() - t0 > ue) return { aru: false, byo: ((Date.now() - t0) / 1000).toFixed(1) };
+      await machi(200);
+    }
+  };
   const chohyo = async (which, btnId) => {
     await osu(pg, '.bn[data-scr="scr-list"]'); await machi(600);
     await osu(pg, '.seg-b[data-view="cho"]'); await machi(600);
-    await osu(pg, '.seg-b[data-cho="' + which + '"]'); await machi(1600);
+    await osu(pg, '.seg-b[data-cho="' + which + '"]');
+    const m = await matsuMade(btnId);
+    console.log('       ' + which + ' … ★ボタンが 出るまで ' + m.byo + '秒★'
+      + (m.aru ? '' : '（★20秒 待っても 出ない★）') + '（前は 決まった 1.6秒だけ 待って いた）');
     return pg.evaluate((id) => {
       const btn = document.querySelector(id);
       const c = document.querySelector('#view-cho');
@@ -534,6 +558,9 @@ try {
   const km = await KAKUTEI_MODOSU(KAKUTEI_MAE);
   console.log('       片づけ … ' + (km.ok ? '★この回で 付いた 確定 ' + km.n + '件を 外した★'
     : '🟡 確定を 戻せなかった … ' + km.naze));
+  const ks = await KAISHA_MODOSU(KAISHA_MAE);
+  console.log('       片づけ … ' + (ks.ok ? '★会社の 欄を 控えに 戻した ' + ks.n + '行★（媒体通番は 戻さない）'
+    : '🟡 会社の 欄を 戻せなかった … ' + ks.naze));
   const kk = await KOUKAI_KESU(KOUKAI_MAE);
   console.log('       片づけ … ' + (kk.ok ? '★この回で 出来た 公開 … 紙 ' + kk.kami + '枚／鍵 ' + kk.kagi + '行を 消した★'
     : '🟡 公開を 戻せなかった … ' + kk.naze));
