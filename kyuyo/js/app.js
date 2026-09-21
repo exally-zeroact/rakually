@@ -44,6 +44,27 @@
   var attr=function(s){return String(s==null?'':s).replace(/"/g,'&quot;');};
   var uid=function(){return 'e'+Math.abs(Date.now()%1e7).toString(36)+Math.floor(performance.now()).toString(36);};
 
+  /* ★★CSVの文字コードを決める(勤怠CSV取込／他ソフト移行の★2か所とも★ここを通す)★★(2026-09-19)
+     ★前★ 「UTF-8で読んで ★日本語らしい字(ぁ-ん ァ-ヴ 一-龠)が 無ければ★ Shift-JISで読み直す」
+     ★何が起きるか(実測)★ ★半角カナだけのUTF-8★(見出しが英字)は この判定に 掛からない
+         ⇒ Shift-JISで読み直して ★化ける★  ﾃｽﾄ ﾀﾛｳ → ??ｽｽ?? ???幢ｽｳ
+         ⇒ 氏名の完全一致で人を突き合わせる(findEmpForKintai)ので ★その人の勤怠が入らない★
+         ※ 未一致は画面に出るし 全部未一致なら取込を断るので ★黙って給与が変わる訳ではない★
+         ※ ★BOMつきUTF-8＋半角カナ★も 同じく化けていた(実測)
+     ★直し方★ ★「どんな字が入っているか」を当てるのをやめる★＝★符号として成り立つかだけで決める★
+         ①BOM(EF BB BF)が在れば UTF-8で確定
+         ②fatal:true で UTF-8として読めるか試す(通れば UTF-8／例外なら Shift-JIS)
+       ⇒ ★在る字を数え上げる形は 必ず漏れる★(々 ヶ 〆／記号だけ／英字だけ…)＝漏れが構造上出ない形にする
+     ★測った(今/直しを同じ材料で並べた)★ 半角カナUTF-8=直る／BOM付き=直る
+       Shift-JIS・漢字入りUTF-8・英数だけ・壊したバイト=★4つとも 今と同じ★ */
+  function csvMojiYomu(buf){
+    var b=new Uint8Array(buf);
+    /* ★BOM が 在れば UTF-8 で 確定★＝厳しく しない(fatal:false)／無ければ ★厳しく 試す★ */
+    var bom=(b.length>=3 && b[0]===0xEF && b[1]===0xBB && b[2]===0xBF);
+    try{ return new TextDecoder('utf-8',{fatal:!bom}).decode(buf); }
+    catch(e){ try{ return new TextDecoder('shift-jis').decode(buf); }catch(_){ return ''; } }
+  }
+
   // Excelで使える色パレット(標準色+濃淡+定番)。アクセント/罫線/文字を別々に選ぶ
   var PALETTE=['#000000','#23261f','#404040','#595959','#808080','#A6A6A6','#BFBFBF','#D9D9D9','#E7E6E6','#F2F2F2',
     '#C00000','#FF0000','#E36C0A','#FFC000','#FFFF00','#92D050','#00B050','#00B0F0','#0070C0','#002060','#7030A0',
@@ -325,6 +346,8 @@
       annualHolidays:'', dailyWorkH:'', dailyWorkM:'', workedH:'160', workedM:'0', weeklyScheduledH:'', dailyEntries:[],
       kintai:[{label:'出勤日数',value:'21'},{label:'欠勤日数',value:'0'},{label:'有給取得',value:'1'}],
       shikyu:[{label:'基本給',value:''}],
+      /* ★労働者名簿(労基法107条・労基則53条)の 欄★＝新しい 人にも 最初から 持たせる */
+      taishokuJiyu:'', rireki:'', gyomuShurui:'', shiboYmd:'', shiboGenin:'',
       apply:{}, taxClass:'ko', honninShogai:false, honninKafuHitorioya:'', honninKinrou:false, shortTimeType:'', minWageReduce:'', retired:false, workStatus:'normal', leavePay:'', leaveStartYmd:'', leaveEndYmd:'', leaveDaysInMonth:'',
       warimashi:{ mode:'easy', otH:'', otM:'', nightH:'', nightM:'', holidayH:'', holidayM:'',
         detail:{ ot:{h:'',m:''}, otNight:{h:'',m:''}, over60:{h:'',m:''}, over60Night:{h:'',m:''}, night:{h:'',m:''}, holiday:{h:'',m:''}, holidayNight:{h:'',m:''} } },
@@ -1212,6 +1235,26 @@
         +'<div class="frow"><div class="flabel">生年月日</div><input class="finput m-f" data-f="birthYmd" type="date" value="'+attr(e.birthYmd)+'"></div></div>'
       +'<div class="frow2"><div class="frow"><div class="flabel">入社日<span class="hint2">任意</span></div><input class="finput m-f" data-f="joinYmd" type="date" value="'+attr(e.joinYmd)+'"></div>'
         +'<div class="frow"><div class="flabel">退職日<span class="hint2">任意</span></div><input class="finput m-f" data-f="taishokuYmd" type="date" value="'+attr(e.taishokuYmd)+'"></div></div>'
+      /* ★★労働者名簿(労基法107条・労基則53条)に 要る 欄★★(2026-09-19 司さん「たせ」)
+         ★法の 字は 記憶で 書かず e-Gov 法令API から 原文を 取った★
+           https://laws.e-gov.go.jp/api/2/law_data/322AC0000000049 (労基法・2026-09-19 取得)
+           https://laws.e-gov.go.jp/api/2/law_data/322M40000100023 (労基則・同日)
+         ★法107条★ 氏名/生年月日/★履歴★/その他 省令で 定める事項
+         ★則53条1項★ 一 性別 二 住所 ★三 従事する業務の種類★ 四 雇入の年月日
+                      ★五 退職の年月日及びその事由(解雇の場合は その理由を含む)★
+                      ★六 死亡の年月日及びその原因★
+         ★則53条2項★ ★常時三十人未満の 労働者を 使用する 事業は 第三号を 記入することを要しない★
+         ⇒ ★欄は 作る／「30人未満は 空でよい」と 画面に 1行★(自分で 決めずに 条文の 通り) */
+      +'<div class="frow"><div class="flabel">退職の事由<span class="hint2">任意・解雇なら理由も</span></div>'
+        +'<input class="finput m-f" data-f="taishokuJiyu" value="'+attr(e.taishokuJiyu)+'" placeholder="自己都合／契約期間満了／解雇（理由）"></div>'
+      +'<div class="frow"><div class="flabel">履歴<span class="hint2">社内の異動・昇進</span></div>'
+        +'<input class="finput m-f" data-f="rireki" value="'+attr(e.rireki)+'" placeholder="2024-04 営業部／2025-10 主任"></div>'
+      +'<div class="frow"><div class="flabel">従事する業務の種類<span class="hint2">常時30人未満の事業場は記入不要（労基則53条2項）</span></div>'
+        +'<input class="finput m-f" data-f="gyomuShurui" value="'+attr(e.gyomuShurui)+'" placeholder="経理事務"></div>'
+      +'<div class="frow2"><div class="frow"><div class="flabel">死亡の年月日<span class="hint2">任意</span></div>'
+        +'<input class="finput m-f" data-f="shiboYmd" type="date" value="'+attr(e.shiboYmd)+'"></div>'
+        +'<div class="frow"><div class="flabel">死亡の原因<span class="hint2">任意</span></div>'
+        +'<input class="finput m-f" data-f="shiboGenin" value="'+attr(e.shiboGenin)+'"></div></div>'
       +'<div class="ri-note" style="margin:-4px 2px 8px">入社日・退職日を入れると、その月は<b>在籍日数で日割</b>・退職月の社保は<b>退職日が月末か否か</b>で自動判定。退職月の翌月以降は給与計算の対象から自動で外れます（日割は就業規則の定めに合わせて確認）。</div>'
       +'<div class="frow2"><div class="frow"><div class="flabel">部署</div>'+deptSelect(e)+'</div>'
         +'<div class="frow"><div class="flabel">役職</div>'+roleSelect(e)+'</div></div>'
@@ -1893,7 +1936,45 @@
   }
 
   /* ---------- 入力（自動計算） ---------- */
-  function rowsHTML(g,arr){
+  /* ★★自動計算の 行＝打っても 変わらない 行★★（2026-09-20 司さん「1が ほれなら 注意文 出せや」）
+     ★実測（払い方 6通り × 基本給／通勤 ＝ 12通り すべて）★
+       打てる／字は 残る／★支給合計は 動かない★／★外を 押しても 戻らない★／
+       ★画面を 出て 戻ると 社員マスタの 値に 戻る★
+     ★因★ … `payroll-monthly.js` の `compute` 1行目 `syncCommute(e); syncBasePay(e, ctx);`
+            ＝★計算の たび `e.shikyu` の /基本給/ と /通勤/ の 行を 作り直す★
+     ★直すのは「黙って 捨てる」所★（捨てる事 自体では ない＝司さんの 決め）
+     ★上書きされる 行は この 2つだけ★（`e.shikyu` を 書く 字は :102-103 と :194 の 2か所） */
+  function jidouNoteId(e,g,ri){ return 'jn-'+g+'-'+ri+'-'+((e&&e.id)||'x'); }
+  function jidouGyou(label){
+    var L = String(label||'');
+    if (/基本給/.test(L)) return 'base';
+    if (/通勤/.test(L)) return 'commute';
+    return null;
+  }
+  /* ★行き先は ★画面に 出て いる 字★で 名指しする★（2026-09-20 実物で 写した）
+     ★道順を 当て推量で 書かない★＝「設定 ▸ 従業員」は ★間違い★／実物は ★「従業員マスタ」★
+     ★行き先の 数★ … `syncBasePay` の `amt =` ★6か所★（休業中の 枝は 中で 2つ＝行き先 7通り）
+       ⇒ ★見張り★ `kyuyo/tests/jidou-gyou.test.mjs` が 本数を 決め打つ（増えた日に 赤） */
+  var JIDOU_MICHI = '〈設定 ▸ 従業員マスタ〉';
+  function jidouNote(e, kind){
+    if (kind === 'commute') {
+      return 'ここに打っても 変わりません。'+JIDOU_MICHI+'の〈通勤手当〉で直してください。'
+        + '（名前に「通勤」が入る行は すべて同じ扱いです）';
+    }
+    var atama = 'ここに打っても 変わりません。';
+    if (e && e.workStatus && e.workStatus !== 'normal') {
+      return atama + '休業中のため〈休暇中の支給額〉から計算されます。'
+        + JIDOU_MICHI+'→〈詳細設定〉→〈在籍・勤務〉の〈休暇中の支給額〉で直してください。';
+    }
+    var pt = (e && e.payType) || '月給';
+    if (pt === '時給') return atama + '〈時給単価〉×〈労働時間〉から計算されます。'+JIDOU_MICHI+'の〈時給単価〉で直してください。';
+    if (pt === '日給') return atama + '〈日給額〉×〈出勤日数〉から計算されます。'+JIDOU_MICHI+'の〈日給額〉で直してください。';
+    if (pt === '歩合') return atama + '〈歩合給額〉と〈保障給の時給〉から計算されます。'+JIDOU_MICHI+'で直してください。';
+    if (pt === '役員') return atama + JIDOU_MICHI+'の〈役員報酬〉で直してください。';
+    if (pt === 'カスタム') return atama + JIDOU_MICHI+'の〈決め方〉と〈固定給〉で直してください。';
+    return atama + JIDOU_MICHI+'の〈基本給〉で直してください。';
+  }
+  function rowsHTML(g,arr,e){
     return arr.map(function(it,ri){
       var labelAuto=/通勤|出張|旅費|宿泊|日当/.test(it.label||'');
       // 支給行は非課税を“トグル”に(任意の手当を非課税にできる)。項目名で自動判定される通勤等はON固定(自動)
@@ -1909,7 +1990,25 @@
         var isGB = (it.genbutsu===true);
         hz += '<label class="row-gb" title="社宅・食事など ★現物で 渡した物★（算定基礎届の ⑫に 入ります／お金で 渡した物は 付けない）" style="font-size:10px;color:'+(isGB?'#7A5B00':'#6E6E6E')+';font-weight:'+(isGB?'700':'400')+';white-space:nowrap;display:inline-flex;align-items:center;gap:2px;margin-left:6px"><input type="checkbox" class="ck-gb" data-g="shikyu" data-ri="'+ri+'"'+(isGB?' checked':'')+'>現物</label>';
       }
-      return '<div class="row" style="display:flex;gap:6px;align-items:center;margin-bottom:5px"><input class="finput" data-g="'+g+'" data-ri="'+ri+'" data-f="label" value="'+attr(it.label)+'" style="flex:1.3" placeholder="項目"><input class="finput num" data-g="'+g+'" data-ri="'+ri+'" data-f="value" value="'+attr(it.value)+'" style="flex:1" placeholder="'+(g==='kintai'?'値':'金額')+'">'+hz+'<button class="b-del m-del" data-g="'+g+'" data-ri="'+ri+'" aria-label="この項目を削除">×</button></div>';
+      return '<div class="row" style="display:flex;gap:6px;align-items:center;margin-bottom:5px"><input class="finput" data-g="'+g+'" data-ri="'+ri+'" data-f="label" value="'+attr(it.label)+'" style="flex:1.3" placeholder="項目"><input class="finput num"'+(g==='shikyu'&&jidouGyou(it.label)?' aria-describedby="'+jidouNoteId(e,g,ri)+'"':'')+' data-g="'+g+'" data-ri="'+ri+'" data-f="value" value="'+attr(it.value)+'" style="flex:1" placeholder="'+(g==='kintai'?'値':'金額')+'">'+hz+'<button class="b-del m-del" data-g="'+g+'" data-ri="'+ri+'" aria-label="この項目を削除">×</button></div>'
+        + (g==='shikyu' && jidouGyou(it.label)
+        /* ★★場所を 先に 空ける★★（2026-09-20）
+           ★訳★ … 欄の下に 後から 足すと ★画面が 動く★（実測＝★35px 動いて 指の下から 逃げる★／app.js の
+             「読み込み中は 押せる物を 出さない」の 注記と 同じ 型）。
+           ⇒ ★空の まま 高さだけ 取って おく★＝★字が 出ても 1pxも 動かない★。
+           ★消えない★＝toast に しない 訳（世の中の 調べ … ★消える 知らせは 見逃す／支援技術に 伝わらない★）。 */
+        /* ★★支援技術にも 伝える★★（2026-09-20）
+           ★自分で 引いた 訳に 答える★… 世の中の 調べで「消える 知らせは ★支援技術に 伝わらない★」を
+             toast を やめる 訳に した。★なら インライン側が そこに 答えて いないと 片手落ち★。
+           ★`role="status"` + `aria-live="polite"`★ … ★割り込まずに 読み上げる★
+             （`alert`＝assertive は 打つ たび 割り込む＝煩い）
+           ★`aria-describedby`★ … ★欄に 焦点が 来た 時にも 読み上げられる★＝★欄と 文を 結ぶ★
+           ★この repo で aria-live / role=alert を 使うのは ★ここが 初めて★（実測 0件）★ */
+        ? '<div class="row-note" id="'+jidouNoteId(e,g,ri)+'" data-note="'+g+':'+ri+'"'
+          + ' role="status" aria-live="polite"'
+          + ' style="min-height:15px;font-size:10.5px;line-height:1.35;'
+          + 'color:#8A5A00;margin:-2px 0 5px 2px"></div>'
+        : '');
     }).join('');
   }
   function fmtH(min){ var h=min/60; return (Math.round(h*100)/100)+'h'; }
@@ -2448,7 +2547,7 @@
           +(e.payType==='役員'?'':warimashiInputHTML(e))
           +daikyuInputHTML(e)
           +'<div class="grp"><div class="grp-h">その他の勤怠<button class="mini add" data-add="kintai" data-i="'+i+'" aria-label="勤怠項目を追加">＋</button></div><div class="rows">'+otherKinRows(e)+'</div></div>'
-          +'<div class="grp"><div class="grp-h">支給<button class="mini add" data-add="shikyu" data-i="'+i+'" aria-label="支給項目を追加">＋</button></div><div class="rows">'+rowsHTML('shikyu',e.shikyu)+'</div></div>'
+          +'<div class="grp"><div class="grp-h">支給<button class="mini add" data-add="shikyu" data-i="'+i+'" aria-label="支給項目を追加">＋</button></div><div class="rows">'+rowsHTML('shikyu',e.shikyu,e)+'</div></div>'
           +'<div class="grp"><div class="grp-h">法定外控除<button class="mini add" data-add="extraKojo" data-i="'+i+'" aria-label="控除項目を追加">＋</button></div><div class="rows">'+rowsHTML('extraKojo',e.extraKojo)+'</div></div>'
           +'<div class="calc-wrap">'+calcBoxHTML(e)+'</div></div></div>';
     }).join('');
@@ -2938,7 +3037,9 @@
     +'<button class="seg-b'+(v==='gekkaku'?' on':'')+'" data-cho="gekkaku">月額変更届</button>'
     +'<button class="seg-b'+(v==='roudou'?' on':'')+'" data-cho="roudou">労働保険</button>'
     +'<button class="seg-b'+(v==='shikaku'?' on':'')+'" data-cho="shikaku">資格取得・喪失</button>'
-    +'<button class="seg-b'+(v==='chosho'?' on':'')+'" data-cho="chosho">支払調書</button></div>'; }
+    +'<button class="seg-b'+(v==='chosho'?' on':'')+'" data-cho="chosho">支払調書</button>'
+    /* ★労働者名簿★（労基法107条・様式第十九号）＝2026-09-19 司さん「たせ」で 足した */
+    +'<button class="seg-b'+(v==='meibo'?' on':'')+'" data-cho="meibo">労働者名簿</button></div>'; }
   // 算定基礎届: 確定済みの4〜6月明細(総支給・支払基礎日数)から各人の標準報酬を決定して一覧化(年金機構提出の素)。
   /* ★様式の 欄で 出す★（2026-09-03 指示役の裁定＝D-3-1）
      一次情報＝日本年金機構「被保険者報酬月額算定基礎届（兼）70歳以上被用者算定基礎届」★様式コード 2225★
@@ -3750,7 +3851,51 @@
     else if(v==='roudou'){ host.innerHTML=sub+'<div class="card"><div class="card-h">労働保険</div><p class="hint">読込中…</p></div>'; renderRoudou(sub); }
     else if(v==='shikaku'){ renderShikaku(sub); }
     else if(v==='chosho'){ host.innerHTML=sub+'<div class="card"><div class="card-h">支払調書</div><p class="hint">読込中…</p></div>'; renderChosho(sub); }
+    else if(v==='meibo'){ host.innerHTML=sub+roudoushaMeiboHTML(); }
     else host.innerHTML=sub+shakaiListHTML(); }
+
+  /* ★★労働者名簿（労基法107条・労基則53条・様式第十九号）★★（2026-09-19 司さん「たせ」）
+     ★法の 字は 記憶で 書かず e-Gov 法令API の 原文を 引いた★（2026-09-19 取得）
+       労基法  https://laws.e-gov.go.jp/api/2/law_data/322AC0000000049
+       労基則  https://laws.e-gov.go.jp/api/2/law_data/322M40000100023
+     ★107条★「使用者は、各事業場ごとに労働者名簿を、各労働者（★日日雇い入れられる者を除く★）
+              について調製し、労働者の氏名、生年月日、★履歴★その他厚生労働省令で定める事項を
+              記入しなければならない」
+     ★則53条1項★ 一 性別／二 住所／★三 従事する業務の種類★／四 雇入の年月日／
+                  ★五 退職の年月日及びその事由（解雇の場合は その理由を含む）★／
+                  ★六 死亡の年月日及びその原因★
+     ★則53条2項★「常時★三十人未満★の労働者を使用する事業においては、前項第三号に掲げる
+                  事項を記入することを要しない」
+     ★109条★ 五年間 保存／★則56条一号★ 起算日＝★労働者の死亡、退職又は解雇の日★
+     ★出さない★ … 日日雇い入れられる者（法107条の 括弧書き）＝★条文の 通り★
+     ★決めない★ … 「30人未満なら 出さない」では なく ★欄は 出して 空でよいと 書く★ */
+  function roudoushaMeiboHTML(){
+    var emps=(state.employees||[]);
+    var nin=emps.length;
+    var miman=nin<30;   /* ★常時30人未満＝則53条2項★（★今の 名簿の 人数で 出す＝数を 隠さない★） */
+    /* ★表の 作りは ★賃金台帳と 同じ `dc-tab`★★＝★新しい class を 自分で 作らない★
+       （`.dc-tab` … 1列目 左寄せ・見出し 固定・横に スクロール＝名簿の 形に 合う） */
+    var atama='<thead><tr><th>氏名</th><th>生年月日</th><th>性別</th><th>住所</th><th>履歴</th>'
+      +'<th>従事する業務の種類</th><th>雇入の年月日</th><th>退職の年月日</th><th>退職の事由</th>'
+      +'<th>死亡の年月日</th><th>死亡の原因</th></tr></thead>';
+    var karappo='<span style="color:#92500A">未記入</span>';
+    var mi=function(x){ return (x==null||x==='')?karappo:esc(String(x)); };
+    var gyo=emps.map(function(e){
+      return '<tr><td class="dc-lb">'+mi(e.name)+'</td><td>'+mi(e.birthYmd)+'</td><td>'+mi(e.seibetsu)+'</td>'
+        +'<td>'+mi(e.address)+'</td><td>'+mi(e.rireki)+'</td>'
+        +'<td>'+(miman?'<span class="hint2">30人未満は記入不要</span>':mi(e.gyomuShurui))+'</td>'
+        +'<td>'+mi(e.joinYmd)+'</td><td>'+mi(e.taishokuYmd)+'</td><td>'+mi(e.taishokuJiyu)+'</td>'
+        +'<td>'+mi(e.shiboYmd)+'</td><td>'+mi(e.shiboGenin)+'</td></tr>'; }).join('');
+    return '<div class="card"><div class="card-h">労働者名簿'
+      +'<span class="hint2" style="margin-left:8px">労基法107条・様式第十九号</span></div>'
+      +'<p class="hint" style="margin:0 0 10px">この会社の登録人数 <b>'+nin+'人</b>'
+      +(miman?'＝<b>常時30人未満</b>なので「従事する業務の種類」は<b>記入不要</b>（労基則53条2項）。'
+             :'＝<b>30人以上</b>なので「従事する業務の種類」の記入が<b>要ります</b>（労基則53条2項）。')
+      +'<br>保存は<b>5年間</b>（労基法109条）。数えはじめる日は<b>死亡・退職・解雇の日</b>（労基則56条1号）。'
+      +'<br><b>日々雇い入れられる方</b>は名簿の対象外です（労基法107条）。この表はアプリに登録した方を全員出しています。</p>'
+      +(nin?'<div style="overflow-x:auto"><table class="dc-tab">'+atama+'<tbody>'+gyo+'</tbody></table></div>'
+           :'<p class="hint">従業員がまだ登録されていません。</p>')
+      +'</div>'; }
   // K3 支払調書: 業務委託の年間支払(確定済み月次のshikyuTotal)＋源泉(tax)を人ごとに集計→区分別に提出基準判定。
   function choshoPeople(recs){ var _SC=SC(); if(!_SC) return [];
     return (state.employees||[]).filter(function(e){ return e.employmentType==='contractor'; }).map(function(e){
@@ -5578,7 +5723,23 @@
       if(e.target.classList.contains('cm-f')){ emp[e.target.dataset.cmf]=e.target.value.replace(/[^0-9]/g,''); refreshCard(ci); return; }
       if(e.target.classList.contains('wi-f')){ if(!emp.warimashi)emp.warimashi={}; emp.warimashi[e.target.dataset.wk]=e.target.value.replace(/[^0-9]/g,''); refreshCard(ci); return; }
       if(e.target.classList.contains('wi-df')){ if(!emp.warimashi)emp.warimashi={}; if(!emp.warimashi.detail)emp.warimashi.detail={}; var wd=e.target.dataset.wd; emp.warimashi.detail[wd]=emp.warimashi.detail[wd]||{h:'',m:''}; emp.warimashi.detail[wd][e.target.dataset.dp]=e.target.value.replace(/[^0-9]/g,''); refreshCard(ci); return; }
-      var g=e.target.dataset.g, ri=+e.target.dataset.ri, f=e.target.dataset.f; if(e.target.classList.contains('ck-gb')){emp[g][ri].genbutsu=e.target.checked;refreshCard(ci);return;}   /* ★現物の印★（2026-09-03） */
+      var g=e.target.dataset.g, ri=+e.target.dataset.ri, f=e.target.dataset.f;
+      /* ★★自動計算の 行に 打たれた★★（2026-09-20 司さんの 決め＝「注意文 出せや」）
+         ★前★ … 打てる／字は 残る／合計は 動かない／画面を 出て 戻るまで ★食い違ったまま★
+         ★今★ … ⑴★打った 字を その場で 戻す★（★画面と 中身を 食い違わせない★）
+                 ⑵★欄の すぐ下に 文を 出す★（★消えない／場所は 先に 取ってある＝画面が 動かない★）
+         ★出し方の 訳★ … 世の中の 調べ（NN/g）＝★消える 知らせ（toast）は フォームの 誤りに 向かない★
+           （見逃す／支援技術に 伝わらない）。★自分たちの アプリにも 同じ形は 0件だった★。 */
+      if(g==='shikyu'&&f==='value'&&emp&&emp[g]&&emp[g][ri]){
+        var _jk=jidouGyou(emp[g][ri].label);
+        if(_jk){
+          e.target.value = emp[g][ri].value;                 /* ★中の 数に 戻す★ */
+          var _nt=card.querySelector('[data-note="'+g+':'+ri+'"]');
+          if(_nt) _nt.textContent = jidouNote(emp, _jk);
+          return;
+        }
+      }
+      if(e.target.classList.contains('ck-gb')){emp[g][ri].genbutsu=e.target.checked;refreshCard(ci);return;}   /* ★現物の印★（2026-09-03） */
       if(e.target.classList.contains('ck')){emp[g][ri].hikazei=e.target.checked;refreshCard(ci);return;} if(g&&!isNaN(ri)&&f){emp[g][ri][f]=e.target.value;refreshCard(ci);} });
 
     // 一覧/集計
@@ -5720,8 +5881,7 @@
     (function(){ var kf=$('#kintai-file'); if(!kf) return;
       kf.addEventListener('change', function(ev){ var f=ev.target.files&&ev.target.files[0]; if(!f) return;
         var rd=new FileReader(); rd.onload=function(){ var buf=rd.result, text='';
-          try{ text=new TextDecoder('utf-8',{fatal:false}).decode(buf); if(/�/.test(text) || !/[ぁ-んァ-ヴ一-龠]/.test(text)){ text=new TextDecoder('shift-jis').decode(buf); } }
-          catch(e){ try{ text=new TextDecoder('shift-jis').decode(buf); }catch(_){ text=''; } }
+          text=csvMojiYomu(buf);   /* ★符号の見分けは 1か所(csvMojiYomu)★ */
           importKintaiCsv(text);
         }; rd.readAsArrayBuffer(f);
       });
@@ -5739,8 +5899,7 @@
           }; rd.readAsArrayBuffer(f);
         } else {
           rd.onload=function(){ var buf=rd.result, text='';
-            try{ text=new TextDecoder('utf-8',{fatal:false}).decode(buf); if(/�/.test(text)||!/[ぁ-んァ-ヴ一-龠]/.test(text)){ text=new TextDecoder('shift-jis').decode(buf); } }
-            catch(e){ try{ text=new TextDecoder('shift-jis').decode(buf); }catch(_){ text=''; } }
+            text=csvMojiYomu(buf);   /* ★符号の見分けは 1か所(csvMojiYomu)★ */
             importMigration(MigrateMap.parseCsv(text));
           }; rd.readAsArrayBuffer(f);
         }

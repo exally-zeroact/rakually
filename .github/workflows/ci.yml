@@ -561,6 +561,8 @@ jobs:
         run: node kyuyo/tests/souko-mon.test.mjs && node kyuyo/tests/souko-mon.test.mjs --self-test
       - name: ★人を消したら その人の給与明細も倉庫から消す／消す道は1か所（ボタンとスワイプを揃える）
         run: node kyuyo/tests/emp-kesu-meisai.test.mjs && node kyuyo/tests/emp-kesu-meisai.test.mjs --self-test
+      - name: ★客に出る紙は全部「中身を見る実ブラウザ試験」を持つ（09-19＝手で引いて2回外した／名前の形で引く・置き場を1つしか見ない）
+        run: node kyuyo/scripts/check-kami-to-tesuto.mjs && node kyuyo/scripts/check-kami-to-tesuto.mjs --self-test
       - name: ★労災の札は選んだ業種を出す（09-18＝選んでも「業種を 選んでください」のままだった／計算は合っていたので気づきにくい）
         run: node kyuyo/tests/rousai-fuda.test.mjs && node kyuyo/tests/rousai-fuda.test.mjs --self-test
       - name: ★倉庫の権限と「消すと道連れになる親」を実物に聞く（09-18＝鍵を消したらお金の記録が13枚CASCADEで消えた／CIに鍵が無ければ未測定と出して抜ける）
@@ -669,3 +671,15 @@ jobs:
         run: node kyuyo/scripts/pull-statutory.mjs --check
       - name: Statutory drift guard (lib == 中央statutory)
         run: node kyuyo/scripts/verify-statutory.mjs
+      - name: ★総なめの「未測定」の 数え方（終わりの行で数える／凡例や但し書きの字は数えない）★
+        run: node tools/clock-sweep.mjs --self-test-kazoe
+      - name: ★総なめの 顔（souname）の 判じの 自己確認＝見張りが 見張られて いない 所を 作らない★
+        run: node tools/souname.mjs --self-test
+      - name: ★手元の 絶対パス（C:/Users/…）で 読み込んで いないか（09-21 CI が 赤＝手元は 緑・CI は 赤 の 形）★
+        run: node tests/temoto-no-michi.test.mjs --self-test && node tests/temoto-no-michi.test.mjs
+      - name: ★わざと 1本 足しても 赤に ならなければ 空振り（足した 紙は 必ず 消す）★
+        run: node tests/temoto-no-michi.test.mjs --waza
+      - name: ★古い 名前（exally_*）を 使って いる 所を 数える（覗き窓を 外せる 日を 機械で 決める）★
+        run: node tests/furui-namae.test.mjs --self-test
+      - name: ★社保の 率の 読み取りの 自己確認（★外に 出ない★・漢数字と 幅の 取り方）★
+        run: node kyuyo/scripts/check-shaho-ritsu.mjs --self-test

@@ -79,12 +79,12 @@ if (SELF) {
     process.exit(0);
   }
 }
-let borrow, pwLaunch, hairu, osu, KAZOERU, AWASERU, GOMI_KESU, IMA, KATAZUKERU, KAISHA_HIKAE, KAISHA_MODOSU;
+let borrow, pwLaunch, hairu, osu, KAZOERU, AWASERU, GOMI_KESU, IMA, KATAZUKERU, KAISHA_HIKAE, KAISHA_MODOSU, SHIKEN_NA;
 try {
   ({ borrow, launch: pwLaunch } = await import('../../scripts/_borrow-playwright.mjs'));
   ({ hairu, osu } = await import('../../tests/_hairu.mjs'));
   ({ kazoeru: KAZOERU, awaseru: AWASERU, konkaiNoGomiKesu: GOMI_KESU, ima: IMA,
-     kaishaHikaeru: KAISHA_HIKAE, kaishaModosu: KAISHA_MODOSU } = await import('./_souko-kazoeru.mjs'));
+     kaishaHikaeru: KAISHA_HIKAE, kaishaModosu: KAISHA_MODOSU, shikenNa: SHIKEN_NA } = await import('./_souko-kazoeru.mjs'));
   ({ katazukeru: KATAZUKERU } = await import('./_kyaku_no_michi_de_katazukeru.mjs'));
 } catch (e) { console.log('🟡 ★未測定★ 道具が 読めない … ' + (e && e.message)); process.exit(2); }
 const wk = await borrow('fuyo-ui', 'webkit');
@@ -300,13 +300,32 @@ try {
     for (const k of ['zaiseki', 'zei', 'shaho', 'teate', 'kazoku']) {
       if (mae === hoshii.length) break;
       await akeru(k);
-      const r = await matsu(hoshii, mae, 6000);   /* ★増えるまで 待つ（1つ ぶん 6秒）★ */
+      /* ★探す ための 待ちは 短いまま（1つ ぶん 6秒）★
+         ★一度 18秒に 上げて 測ったら 手元が 18.2秒 → ★54.3秒★に なった★
+         ＝★欄が 入って いない かたまりでも 18秒 待つ★から。
+         ⇒ ★探す 待ちは 元へ戻し、下の ★まとめ待ち★だけ 長くする★（そこが 遅い 機械の 効く所）
+         ＝★外れた 見込みも 残す★[[feedback_hazureta_mikomi_wo_sutenai]] */
+      const r = await matsu(hoshii, mae, 6000);
       mattaKei += r.matta;
       mae = r.n;
     }
     if (mae !== hoshii.length) {
       /* ★最後に もう一度 まとめて 待つ★＝★遅い 機械で 出そろう のを 逃さない★ */
-      const r2 = await matsu(hoshii, mae - 1, 12000);
+      /* ★★まとめ待ち 12秒 → 36秒★★（2026-09-19 CI の 実測で 上げた）
+         ★測った★ … 同じ 機械・同じ 回で ★「かたまりを 開く」に 18.2秒★
+           次の 段は ★30.2秒 待って 1個 足りない★で 赤（★手元は 0.0秒★）。
+         ⇒ ★遅さは 手元の 何十倍★＝★12秒は 近すぎた★（「たまに 赤」の 正体）
+         ⇒ ★早く 出れば すぐ 抜ける★＝手元の 速さは 変わらない。
+         ＝[[feedback_yure_to_yobu_mae_ni_dore_dake_tarinai_ka_hakare]] */
+      /* ★★`mae - 1` だと ★まとめ待ちが 1度も 効きません★★（2026-09-21 字で 決めた）
+         `matsu` は ★`n > mae` なら すぐ 戻る★。何も 見つかって いない 時は mae = 0 なので
+         ★`0 > -1` が ★最初から 真★★ ⇒ ★★「36秒 待つ」が ★即 戻る★★
+         ⇒ ★実際の 上限は かたまり 5つ × 6秒 ⇒ ★丁度 30秒★だけだった★
+         ★実測★ … 赤の 回 ★待った 31.1秒 / 31.4秒★＝★上限 そのもの（余り 0）★
+         ⇒ ★★「揺れ」では なく 「足りない」★★（★揺れと 呼ぶ 前に どれだけ 足りないか 測れ★）
+         ★これは 09-19 に 「12秒 → 36秒 に 上げた」と 紙に 書いた 当の 待ちです★
+         ⇒ ★★「変えた つもり」は 出しの 字で 確かめろ★★＝★上げた はずの 待ちが 一度も 動いて いなかった★ */
+      const r2 = await matsu(hoshii, mae, 36000);
       mattaKei += r2.matta;
       mae = r2.n;
     }
@@ -323,22 +342,80 @@ try {
   const dsAkeru = async () => {
     /* ★ここも 時間では なく 数で 待つ★（上と 同じ 訳） */
     const t0 = Date.now();
+    let atta = null;
     for (let i = 0; i < 3; i++) {
       if (await aruka(CARD + ' [data-dsub]')) return true;
-      await nage(CARD, '.emp-dtgl[data-dtoggle]');
+      /* ★★`nage` は ★押す 物が 在ったか★ を 返して いるのに 捨てて いました★★
+         （2026-09-21＝今日 4つ目の「飲む」。★押す 物が 無い★と
+          ★押したが 開かない★は ★全く 別の 枝★なのに 同じ 顔に なる） */
+      atta = await nage(CARD, '.emp-dtgl[data-dtoggle]');
       const r = await matsu([CARD + ' [data-dsub]'], 0, 6000);
       if (r.n > 0) return true;
     }
+    /* ★★ここも ★上限 そのもの★ で 落ちて いました★★（2026-09-21）
+       ★上★ … 3回 × 6秒 ⇒ ★丁度 18秒★／★実測 ★待った 18.7秒★＝★余り 0★
+       ⇒ ★揺れでは なく 足りない★。`hiraku` と 同じ 形で ★最後に まとめて 待つ★。
+       ★遅く ならない 訳★ … `matsu` は ★出た すぐ 戻る★＝★待ちの 代金は 落ちる 時だけ★ */
+    if (!(await aruka(CARD + ' [data-dsub]'))) {
+      const r3 = await matsu([CARD + ' [data-dsub]'], 0, 36000);
+      if (r3.n > 0) { console.log('       ★詳細設定は まとめ待ちで 開きました … ' + r3.matta.toFixed(1) + '秒★'); return true; }
+    }
     const ok = await aruka(CARD + ' [data-dsub]');
-    if (!ok) console.log('       🟡 詳細設定が ' + ((Date.now() - t0) / 1000).toFixed(1) + '秒 待っても 開かない');
+    if (!ok) {
+      /* ★★「開かない」だけでは 因が 決まらない★★＝★番を 全部 出す★
+         ★見る 物★ … ★札自体が 在るか★／★切り替えの 印が 何個★／★中身が 何個★
+           ／★覚い（モーダル）が 出て いないか★（今日 `.wm-qrall` で 捕まえた 形）
+           ／★印の 真ん中に 居る 物★（`elementFromPoint`） */
+      const mi = await pg.evaluate((c) => {
+        const card = document.querySelector(c);
+        const tg = card && card.querySelector('.emp-dtgl[data-dtoggle]');
+        let ue = null;
+        if (tg) {
+          const b = tg.getBoundingClientRect();
+          const e2 = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+          ue = e2 ? (e2.tagName.toLowerCase() + (e2.className ? '.' + String(e2.className).split(' ').join('.') : '')).slice(0, 60) : '(誰も 居ない)';
+        }
+        return { fuda: !!card, tgl: card ? card.querySelectorAll('.emp-dtgl[data-dtoggle]').length : -1,
+          dsub: card ? card.querySelectorAll('[data-dsub]').length : -1,
+          ooi: document.querySelectorAll('.ui-modal-ov').length, ue: ue, sai: window.__saiKazu,
+          fudaKazu: document.querySelectorAll('#emp-list .mco').length };
+      }, CARD).catch((e) => ({ dame: String((e && e.message) || e).slice(0, 60) }));
+      console.log('       🟡 詳細設定が ' + ((Date.now() - t0) / 1000).toFixed(1) + '秒 待っても 開かない'
+        + ' … ★押す 物が 在ったか ' + JSON.stringify(atta) + '★ ／ ' + JSON.stringify(mi));
+    }
     return ok;
   };
   await dsAkeru();
   const HON = ['seibetsu', 'zip', 'address', 'kisoNenkin', 'hokenshaNo'].map((f) => CARD + ' [data-f="' + f + '"]');
+  /* ★★描き直しを 数える★★（2026-09-21＝指示役1 の ★枝★）
+     ★見立て★ … ★開けて いる★のに ★読み込みが 遅れて 返り 画面ごと 描き直され★
+       ★開いた 物が 閉じる★のでは ないか
+       （実測済み … `reloadCloud` → `applyCloudState` → `showScreen(...)` で 描き直す／
+         ★時間切れが 0か所★＝読み込みは ★何秒でも 遅れて 返る★）
+     ★当てません★ … ★描き直しの 回数を 数えて 出すだけ★ */
+  await pg.evaluate(() => {
+    if (window.__saiKazu != null) return;
+    window.__saiKazu = 0;
+    const t = document.querySelector('#emp-list');
+    if (!t) { window.__saiKazu = -1; return; }
+    new MutationObserver((ms) => {
+      for (const m of ms) {
+        if (m.type === 'childList' && (m.addedNodes.length || m.removedNodes.length)) window.__saiKazu++;
+      }
+    }).observe(t, { childList: true, subtree: true });
+  }).catch(() => null);
+  const saiYomu = () => pg.evaluate(() => window.__saiKazu).catch(() => null);
+  const saiMae = await saiYomu();
   console.log('       かたまりを 開く … ' + JSON.stringify(await hiraku(HON)));
+  console.log('       描き直しの 回数 … 開く前 ' + saiMae + ' → 開いた後 ' + (await saiYomu()));
 
   /* ── ① 本人の 欄（★確定は させない★＝A案。届出に 明細の 確定は 要らない） ── */
-  const NA = '試験' + String(Date.now()).slice(-6);
+  /* ★★名前の 頭に 席の 印を 付ける★★（2026-09-19）
+     ★訳★＝★同じ 試験の 倉庫を ★この 機械★と ★GitHub の 機械★が 使う★
+       ⇒ ★増えた 人が どちらの 物か 名前で 分かる★＝★門が 相手の 分で 赤に しない★
+       （印が 無いと ★「どちらか 決められない」＝赤★の まま＝★CI が 走る たび 赤★）
+     ★印★ … 手元＝`手` ／ 会社の 検査＝`CI`（`_souko-kazoeru.mjs` の `SEKI_SHIRUSHI`） */
+  const NA = SHIKEN_NA('試験' + String(Date.now()).slice(-6));
   for (const [f, v] of [['name', NA + Z + '太郎'], ['kana', 'ｼｹﾝ ﾀﾛｳ'], ['birthYmd', '1985-05-15'],
     ['seibetsu', 'male'], ['zip', '790-0001'], ['address', '愛媛県松山市1-2-3'],
     ['kisoNenkin', '1234-567890'], ['hokenshaNo', '1']]) {
@@ -347,11 +424,73 @@ try {
   /* 家族（被扶養者）の かたまりを 開く */
   /* 家族を 1人 足す（★本物の click★＝ここは 測る所） */
   /* ★家族の かたまりを 開いてから 足す★（開いていないと ＋の ボタンも DOM に 無い） */
-  await hiraku([CARD + ' [data-kzadd]']);
-  await pg.click(CARD + ' [data-kzadd]', { timeout: 8000 }).catch(() => null);
+  /* ★★ここの 出しを 出さないと 因が 決められません★★（2026-09-21 実測で 踏んだ）
+     ★何が 起きたか★ … 家族の 欄が ★約31秒 待っても 0個★（2回 連続）
+       ★しかし ★＋の ボタンを 開けたか・押せたか★ が ★字に 出て いなかった★
+       （`.catch(() => null)` で ★黙って 死ぬ★＝★口を 確かめずに 書いた コードは 静かに 死ぬ★）
+     ⇒ ★★見られない 物は 見張れない★★＝★開けたか・押せたか・何個 在るかを 全部 出す★ */
+  const kzAke = await hiraku([CARD + ' [data-kzadd]']);
+  const kzBtn = await pg.evaluate((c) => document.querySelectorAll(c + ' [data-kzadd]').length, CARD);
+  let kzOsu = 'OK';
+  /* ★★playwright の 「なぜ 押せないか」は ★後ろの 行に 出る★★（2026-09-21 CI で 踏んだ）
+     ★前★ … ★行を 切って 頭の 80字だけ★ ⇒ `page.click: Timeout 8000ms exceeded.` だけ 残った
+       ⇒ ★★訳（見えない／動いて いる／★覆いに 遮られて いる★）を 私が 切って 捨てて いた★★
+     ⇒ ★行を 繋げて 400字まで 残す★（★出しを 自分で 切ったら 書く★） */
+  await pg.click(CARD + ' [data-kzadd]', { timeout: 8000 }).catch((e) => {
+    /* ★★切った 事を ★数で★ 出す★★（2026-09-21＝400字では 足りなかった）
+       ★実測★ … 400字で `scrolling into view if needed` まで。
+         ★`intercepts pointer events` の 行まで 届いて いない★
+       ⇒ ★上限を 上げる★＋★★全何字のうち 何字 出したかを 必ず 書く★★
+         （★次に 足りたか 余ったかを ★数で★ 決められる★） */
+    const zenji = String((e && e.message) || e).split(String.fromCharCode(10)).join(' / ');
+    const UE = 1600;
+    kzOsu = zenji.slice(0, UE) + '【全 ' + zenji.length + '字のうち '
+      + Math.min(UE, zenji.length) + '字 出した' + (zenji.length > UE ? '＝★足りて いません★' : '＝足りて います') + '】';
+  });
+  console.log('       家族の ＋ボタン … 開けた ' + JSON.stringify(kzAke)
+    + ' ／ DOMに ' + kzBtn + '個 ／ 押した ' + kzOsu);
+  /* ★★押せなかった 瞬間の 番★★（2026-09-21＝指示役1 の ①）
+     playwright の click が 待つ 物は 4つ … ★見える／動いて いない／押せる／覚いが 無い★
+     ⇒ ★どれが 揃わなかったかを その場で 取る★（★今朝 `.wm-qrall` で 使った 形★）
+     ★画面の 大きさも 取る★ … ★手元では 押せて CI で 押せない★ので ★違いを 探す★ */
+  if (kzOsu !== 'OK') {
+    const ban = await pg.evaluate((c) => {
+      const card = document.querySelector(c);
+      const el = card && card.querySelector('[data-kzadd]');
+      if (!el) return { nai: true };
+      const b = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      const x = b.left + b.width / 2, y = b.top + b.height / 2;
+      const ue = document.elementFromPoint(x, y);
+      const na = (n) => n ? (n.tagName.toLowerCase()
+        + (n.id ? '#' + n.id : '')
+        + (n.className ? '.' + String(n.className).trim().split(/\s+/).join('.') : '')).slice(0, 70) : '(誰も 居ない)';
+      return {
+        mieru: !!(b.width && b.height) && cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0',
+        hako: { x: Math.round(b.left), y: Math.round(b.top), w: Math.round(b.width), h: Math.round(b.height) },
+        gamen: { w: innerWidth, h: innerHeight },
+        nakaKa: b.top >= 0 && b.left >= 0 && b.bottom <= innerHeight && b.right <= innerWidth,
+        ue: na(ue), jibunKa: ue === el || (ue && el.contains(ue)),
+        ooi: document.querySelectorAll('.ui-modal-ov, .modal, [aria-modal="true"]').length,
+        /* ★★覚いの 正体を 名指しする★★（2026-09-21 実測）
+           `.ui-modal-ov` は ★読み込み中の 覚いでは なく★
+           ★`uiModal()` が 作る 確認・お知らせの 箱★（app.js:2182）
+           ＝★ボタンを 押すまで 消えない★＝★お客さんも 下を 押せない★
+           ⇒ ★★どの 箱かを 出さないと 直せません★★ */
+        hako_no_ji: Array.prototype.slice.call(document.querySelectorAll('.ui-modal-ov')).map((o) => ({
+          dai: (o.querySelector('.ui-modal-t') || {}).textContent || '(題 無し)',
+          hon: ((o.querySelector('.ui-modal-b') || {}).textContent || '(文 無し)').slice(0, 200),
+          botan: Array.prototype.slice.call(o.querySelectorAll('.ui-modal-btn')).map((b2) => b2.textContent),
+        })),
+        pe: cs.pointerEvents, disabled: !!el.disabled,
+      };
+    }, CARD).catch((e) => ({ dame: String((e && e.message) || e).slice(0, 80) }));
+    console.log('       ★押せなかった 瞬間の 番★ … ' + JSON.stringify(ban));
+  }
   await machi(1000);
   /* ★足すと 描き直る★＝欄が 出るまで もう一度 開く */
   console.log('       家族の 欄を 出す … ' + JSON.stringify(await hiraku([CARD + ' [data-kz$=":0:seiKanji"]'])));
+  console.log('       描き直しの 回数（家族の 欄を 待った 後） … ' + (await saiYomu()));
   const kzAru = await pg.evaluate((c) => document.querySelectorAll(c + ' [data-kz]').length, CARD);
   T('★家族を 1人 足せた（欄が 出た）', kzAru > 0, '家族の 欄が ' + kzAru + '個');
 
@@ -437,7 +576,19 @@ try {
     if (v === '3') { await kzu('bikou', '氏名変更（旧：試験' + Z + '一朗）'); }
     return chohyo();
   };
-  for (const [v, na] of [['1', '増えた'], ['2', '減った'], ['3', '変わった']]) {
+  /* ★★1枚目だけ 落ちない★ の 訳を 割る 為の ◆順番を 入れ替える◆★★（2026-09-21）
+     ★問い★ … ★1枚目だけ 何が 違うか★
+       㞊 ★順番★（前に 何も 無い／落とす 仕組みが まだ 温まって いない）
+       㞋 ★中身★（異動の別 [1] だけ 別の 道を 通る）
+     ★割り方★ … ★FUYO_JUN=gyaku で [3] を 1枚目に する★
+       ・入れ替えても 1枚目が 落ちない ⇒ ★順番の 話★
+       ・[1] が 何番目でも 落ちない ⇒ ★中身の 話★
+     ＝★2通りの 入れ方で 比を 見る★（今日 何度も 使った 形） */
+  const KUMI = [['1', '増えた'], ['2', '減った'], ['3', '変わった']];
+  if (String(process.env.FUYO_JUN || '') === 'gyaku') KUMI.reverse();
+  console.log('  ★試す 順番★ … ' + KUMI.map((x) => x[1] + '[' + x[0] + ']').join(' → ')
+    + (String(process.env.FUYO_JUN || '') === 'gyaku' ? '（★逆★）' : '（並）'));
+  for (const [v, na] of KUMI) {
     /* ★材料（会社の 住所）が 届いていないなら ★赤では なく 未測定★★
        ＝★押せない 訳が アプリの 側に 在るのか 私の 側に 在るのか 分からない★時に
          赤を 出すと ★狼少年★に なる（[[feedback_mimisokutei_to_kikai_ga_maikai_mite_inai_wa_betsumono]]）。 */
@@ -453,11 +604,79 @@ try {
        ⇒ ★本当に 押して 落として 中の 字を 読む★。
        Shift_JIS の 2バイト目は 0x40-0x7E / 0x80-0xFC＝★カンマ(0x2C)に ならない★ので、
        列を 数えるだけなら latin1 で 読んで よい（字を 出す 所では 使わない）。 */
-    const [dl] = await Promise.all([
-      pg.waitForEvent('download', { timeout: 25000 }).catch(() => null),
-      pg.click('#b-fuyo-csv', { timeout: 8000 }).catch(() => null),
-    ]);
-    T('★' + na + '＝押したら 本当に 落ちる', !!dl, 'ファイルが 落ちてこない');
+    /* ★★「落ちて こない」には 2つ 在る★★（2026-09-21＝指示役1 の 㞎）
+       㞊 ★本当に 1つも 無い★／㞋 ★落ちて いるが ★私が 見て いる 所に 無い★★
+       （★今日 何度も 出た 形★）
+       ★待ちの 上限と 実測を 並べる★／★押した 時の 訳を 飲まない★／
+       ★別の 窓（popup）・画面の 叫びも 数える★ */
+    const DL_UE = 25000;
+    const t0dl = Date.now();
+    const sakebi = [];
+    const onErr = (e) => sakebi.push('pageerror: ' + String((e && e.message) || e).slice(0, 90));
+    const onCon = (m) => { if (m.type() === 'error') sakebi.push('console: ' + m.text().slice(0, 90)); };
+    const onPop = () => sakebi.push('★別の 窓が 開いた（popup）★');
+    pg.on('pageerror', onErr); pg.on('console', onCon); pg.on('popup', onPop);
+    let osuDame = 'OK';
+    const dlP = pg.waitForEvent('download', { timeout: DL_UE }).catch(() => null);
+    await pg.click('#b-fuyo-csv', { timeout: 8000 }).catch((e) => {
+        /* ★★また 切って いました（今日 3度目）★★（2026-09-21）
+           80字 → 400字 → ★300字★。どれも ★playwright の 訳の 手前★で 切れた。
+           ★数で 見る★ … 前回の 出しは `- e` で 終わって いた（`element ...` の 頭）
+           ⇒ ★★切らない★★＋★全何字 のうち 何字 出したかを 書く★
+              （★次に 足りたかを 数で 決められる★） */
+        const zenji2 = String((e && e.message) || e).split(String.fromCharCode(10)).join(' / ');
+        const UE2 = 2000;
+        osuDame = zenji2.slice(0, UE2) + '【全 ' + zenji2.length + '字のうち '
+          + Math.min(UE2, zenji2.length) + '字 出した'
+          + (zenji2.length > UE2 ? '＝★足りて いません★' : '＝足りて います') + '】';
+    });
+    /* ★★押せなかったのに 25秒 待って いました★★（2026-09-21）
+       ★押した 結果を 見てから 待つ★＝★赤 1回あたり 25秒 得する★
+       ★でも 待ちは 消さない★ … ★「押した OK」でも 落ちない 事が 在りうる★
+       ⇒ ★押せたなら 上限まで／押せなかったなら ★あと 1秒だけ★ 待つ★
+       （★黙って 打ち切らない★＝待った 秒を 必ず 出す） */
+    const dl = (osuDame === 'OK')
+      ? await dlP
+      : await Promise.race([dlP, new Promise((r) => setTimeout(() => r(null), 1000))]);
+    const mattaDl = ((Date.now() - t0dl) / 1000).toFixed(1);
+    pg.off('pageerror', onErr); pg.off('console', onCon); pg.off('popup', onPop);
+    console.log('       落ちるのを 待った … 上限 ' + (DL_UE / 1000) + '秒 ／ 実測 ' + mattaDl + '秒'
+      + ' ／ 余り ' + (DL_UE / 1000 - Number(mattaDl)).toFixed(1) + '秒'
+      + ' ／ 押した ' + osuDame + ' ／ 画面の 叫び ' + (sakebi.length ? sakebi.join(' ／ ') : '無し')
+      + ' ／ 窓の 数 ' + ctx.pages().length);
+    /* ★★押せなかった 時の 番★★（2026-09-21＝★＋ボタンと 同じ 形★）
+       ★実測★ … 1枚目だけ ★page.click: Timeout 8000ms exceeded★（2枚目・3枚目は OK）
+       ⇒ ★「落ちて こない」では なく ★押せて いない★★
+       ⇒ ★＋ボタンと 同じ ★最初の 1回が 押せない★ が 2か所★
+       ⇒ ★同じ 覚いか 別の 訳かを ここで 割る★ */
+    if (osuDame !== 'OK') {
+      const ban2 = await pg.evaluate(() => {
+        const el = document.querySelector('#b-fuyo-csv');
+        if (!el) return { nai: true };
+        const b = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        const ue = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        const na3 = (nd) => nd ? (nd.tagName.toLowerCase()
+          + (nd.id ? '#' + nd.id : '')
+          + (nd.className ? '.' + String(nd.className).trim().split(/\s+/).join('.') : '')).slice(0, 70) : '(誰も 居ない)';
+        return {
+          mieru: !!(b.width && b.height) && cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0',
+          hako: { x: Math.round(b.left), y: Math.round(b.top), w: Math.round(b.width), h: Math.round(b.height) },
+          gamen: { w: innerWidth, h: innerHeight },
+          nakaKa: b.top >= 0 && b.left >= 0 && b.bottom <= innerHeight && b.right <= innerWidth,
+          ue: na3(ue), jibunKa: ue === el || (ue && el.contains(ue)),
+          ooi: document.querySelectorAll('.ui-modal-ov, .modal, [aria-modal="true"]').length,
+          hako_no_ji: Array.prototype.slice.call(document.querySelectorAll('.ui-modal-ov')).map((o) => ({
+            dai: (o.querySelector('.ui-modal-t') || {}).textContent || '(題 無し)',
+            hon: ((o.querySelector('.ui-modal-b') || {}).textContent || '(文 無し)').slice(0, 200),
+          })),
+          pe: cs.pointerEvents, disabled: !!el.disabled,
+        };
+      }).catch((e2) => ({ dame: String((e2 && e2.message) || e2).slice(0, 80) }));
+      console.log('       ★CSVの ボタンを 押せなかった 瞬間の 番★ … ' + JSON.stringify(ban2));
+    }
+    T('★' + na + '＝押したら 本当に 落ちる', !!dl,
+      osuDame !== 'OK' ? '★押せて いません★（上の 番を 見る）' : 'ファイルが 落ちてこない（上の 数を 見る）');
     if (!dl) continue;
     const na2 = dl.suggestedFilename();
     const fp = await dl.path();
@@ -481,6 +700,21 @@ try {
   await machi(400);
   const ato2 = await pg.evaluate(() => document.querySelectorAll('#emp-list .mco').length);
   console.log('  画面の 札 … 前 ' + mae + ' → 後 ' + ato2 + '（★これは 緑の 根拠に しません★）');
+  /* ★★『緑の 根拠に しない』と『見ない』は 別★★（2026-09-21 実測で 踏んだ）
+     ★実物（5c5ea3b の CI）★
+        片づけ … ⑥開き直して 数えた … ★残り 0人★
+        画面の 札 … ★前 2 → 後 3★
+        🟡 ★未測定★ ★この環境では 倉庫を 数えていません★（試験の 鍵が 無い）
+     ⇒ ★★同じ 出しの 中で 食い違って いたのに 誰も 止めなかった★★
+     ⇒ ★倉庫を 数えられない CI では ★これが 唯一 見える 印★★
+     ⇒ ★★置き去りが 黙って 残り、次の 回の 紙を 壊した★★（扶養CSV が データ2行）
+     ★決め★ … ★★札が 増えたら 赤★★
+        ＝★この 試験は 1人 足して 1人 消す★＝★元に 戻るのが 当たり前★
+     ★増えて いない 時は 緑の 根拠に しない★（減る・同じ には 別の 訳が 在りうる）
+        ＝★★片側だけ 使う★★（今日 何度も 出た「0件は 0件では ない」の 裏） */
+  T('★片づけの 後 画面の 札が 増えて いない（前 ' + mae + ' → 後 ' + ato2 + '）', ato2 <= mae,
+    '★札が ' + (ato2 - mae) + ' 増えました★＝★片づけの「残り 0人」と 食い違って います★'
+    + '（★倉庫を 数えられない 席でも これは 見えます★）');
   /* ★本当の 判じは 倉庫★＝消えるまで 待ち、待っても 消えなければ 赤 */
   const sou = await AWASERU(soukoMae, 20);
   if (sou.han === '環境') console.log('  ' + sou.iu);   /* ★緑で 通すが 数は 出す★（総なめが 拾う 字） */
