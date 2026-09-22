@@ -8,6 +8,20 @@
   var SCREENS=['sc-bad','sc-setup','sc-login','sc-consent','sc-list','sc-view','sc-nencho','sc-furikomi'];
   function show(id){ SCREENS.forEach(function(s){ var el=$(s); if(el)el.classList.toggle('hidden', s!==id); }); }
   function yen(n){ n=Math.round(Number(n)||0); return '¥'+n.toLocaleString('en-US'); }
+  /* ★直しの 日付を ★短く★ 出す★（例：9月22日）
+     ★時刻は 出さない★＝従業員に 要るのは「いつ 直ったか」だけ
+     ★★空を 返して 黙らない★★（2026-09-22 `silent-catch` に 捕まった）
+       ★前★ … ★読めない 時に 空の 字を 返して いた★
+              ⇒ ★日付が 紙から 黙って 消える★
+       ★今★ … ★読めないと 字で 言う★（★「直しが 入りました」は 必ず 出る★）
+       ★受け皿 自体 要りません★＝`new Date(…)` は 投げず `isNaN` で 分かる
+     ★★説明に ★本物に 見える 字★を 書かない★★（今日 4回目）
+       … 字だけ 見る 門には ★見本と 本物の 別が 付かない★ */
+  function hidukeJi(iso){
+    var t = new Date(iso);
+    if (isNaN(t.getTime())) return '日付が 読めません';
+    return (t.getMonth()+1) + '月' + t.getDate() + '日';
+  }
   function ymLabel(ym, kind){ var y=(ym||'').slice(0,4), m=parseInt((ym||'').slice(5,7),10)||0; if(kind==='gensen') return '令和'+(y-2018)+'年分';   /* ★下の行が「源泉徴収票」と出すので ここで2回 書かない★ */ return '令和'+(y-2018)+'年'+m+'月'+(kind==='bonus'?'（賞与）':'分'); }
 
   /* ★つながらない時に 何も出ないまま止めない★（2026-08-21）
@@ -101,7 +115,13 @@
       var sub=isGensen?'源泉徴収票':(d.kind==='bonus'?'賞与明細':'給与明細');
       var val=isGensen?'<span style="font-size:11px;color:#7aa08c">開いて確認</span>':yen(p.net);
       var row=document.createElement('div'); row.className='drow';
-      row.innerHTML='<div><div class="dl">'+ymLabel(d.ym,d.kind)+(d.openedAt?'':'<span class="badge-new">未読</span>')+'</div><div class="ds">'+sub+'</div></div><div class="dv">'+val+'</div>';
+        /* ★★直しが 入った 事を ★字で★ 出す★★（2026-09-22 司さん「気づかんのやったら 気づくように しろや」）
+           ★未読の 印だけでは ★なぜ また 未読なのか★ が 分かりません★
+           （会社が 確定の 後に 直すと ★中身が 変わって います★）
+           ⇒ ★印（気づく）★と ★訳（分かる）★を 並べる */
+        var nao = d.data && d.data.naoshi && d.data.naoshi.at;
+        var naoJi = nao ? '<span class="naoshi-ji">直しが 入りました（' + hidukeJi(nao) + '）</span>' : '';
+      row.innerHTML='<div><div class="dl">'+ymLabel(d.ym,d.kind)+(d.openedAt?'':'<span class="badge-new">未読</span>')+naoJi+'</div><div class="ds">'+sub+'</div></div><div class="dv">'+val+'</div>';
       row.addEventListener('click', function(){ openDoc(i); });
       host.appendChild(row);
     });
