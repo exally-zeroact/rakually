@@ -2457,8 +2457,15 @@
       +'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px">'
         +'<b style="color:#333333;font-size:13px">当月の所定労働日数 '+sche+'日</b>'
         +'<span style="font-size:10.5px;color:#555555">（休みの曜日・祝日・会社休を除く）</span>'
-        +'<button class="cal-fill" data-fillsche="'+sche+'" style="margin-left:auto;padding:7px 12px;border:1px solid #3D9E72;background:#fff;color:#2E7D54;border-radius:9px;font-weight:700;font-size:12px;cursor:pointer">全員の出勤を所定('+sche+'日)で埋める</button>'
-        +'<button data-csvimport="1" style="padding:7px 12px;border:1px solid #C8ECD8;background:#fff;color:#3D6B53;border-radius:9px;font-weight:700;font-size:12px;cursor:pointer" title="他社勤怠システム/Excelの勤怠CSVを取り込む">📄 勤怠CSVを取り込む（出勤・労働時間）</button>'
+        /* ★★色を その場に 直書きするのを やめた（2026-09-25 司さん「色とか 使い方は ルール違反やないか？」）★★
+           ★台帳（`tests/button-uniform.test.mjs` の 頭）★ … ほか（白）＝白地・字 #2E7D54・枠 #C8ECD8
+           ★実測で 出た 違反 2つ★
+             ・「全員の出勤を…」 … 枠が ★#3D9E72（本命の 緑）★＝★白ボタンに 本命の 色を 使って いた★
+             ・「勤怠CSVを…」 … 字が ★#3D6B53★＝★台帳に 無い 顔★
+           ⇒ ★`btn-ghost` に 寄せる★＝★決まりの 表を 素通りする 直書きを 消す★
+           ★残す 直書きは 並べ方だけ★（`margin-left:auto`）＝★色・枠・角丸・字の 大きさは class に 任せる★ */
+        +'<button class="btn-ghost" data-fillsche="'+sche+'" style="margin-left:auto">全員の出勤を所定('+sche+'日)で埋める</button>'
+        +'<button class="btn-ghost" data-csvimport="1" title="他社勤怠システム/Excelの勤怠CSVを取り込む">📄 勤怠CSVを取り込む（出勤・労働時間）</button>'
       +'</div>'
       +'<div style="font-size:10.5px;color:#555555;margin-top:5px">祝日: '+esc(holStr)+'</div>'
       +'<div style="font-size:10px;color:#555555;margin-top:3px">出勤日数は所定を初期表示。各自で手修正できます（赤で止めません）。会社独自の休みは「設定▸会社の決まり」で追加できます。</div>'
@@ -2467,7 +2474,15 @@
     // 月の状態バッジ(下書き/確定済)=freee型「確定=凍結」の状態を可視化(UX🟠#7)。全員確認済=確定済(凍結)
     var monthConf=monthFixedInfo().fixed;
     var stateChip=monthConf?'<span class="mstate mstate-fixed" title="この月は確定=凍結済み。自動保存では上書きされません">🔒 確定済</span>':'<span class="mstate mstate-draft" title="下書き。編集すると自動保存されます">下書き</span>';
-    var progHTML='<div class="cal-box" style="background:#fff;border:1px solid #d4eae0;border-radius:12px;padding:10px 12px;margin-bottom:12px">'
+    /* ★★人が 何人 居ても「確認◯/◯名」は 上に 貼り付く★★（2026-09-25 司さん
+         「従業員が めちゃくちゃ 多くても 確定の ボタンとかの 所は 固定で 従業員欄だけ スクロールできるなら これでええ」）
+       ★測った（09-25・スマホ 420px）★ … 前は ★全部 `static`＝一緒に 流れる★／
+         人を 5人→30人に すると ★紙の 高さ 1,590px → 5,165px（窓の 約6倍）★
+       ★`position:sticky` に する 訳（★高さで 伸ばさない★）★
+         ＝★別の 転がる 箱を 作ると iOS の `100vh` の 穴を 踏む★
+           （[[feedback_gamen_no_takasa_de_nobasu_na]]＝中身が 収まっていても 空白へ 転がる）
+         ⇒ ★紙は 1枚の まま／帯だけ 貼り付く★＝人の 欄だけが 動いて 見える */
+    var progHTML='<div class="cal-box" style="position:sticky;top:var(--envbar-h,0px);z-index:30;background:#fff;border:1px solid #d4eae0;border-radius:12px;padding:10px 12px;margin-bottom:12px">'
       +'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px">'
         +stateChip
         +'<b style="color:#333333;font-size:13px">確認 '+cnt.done+'/'+cnt.total+'名</b>'
@@ -2506,7 +2521,10 @@
        ★理由を 灰色に するだけで 言わないのは ×★＝札の 中に そのまま 書く。
        ★案Dだけだと 遅い時に 人が 先に 手を 出せる★＝出た瞬間に 3737px 動いた のと 同じ事故。 */
     var soukoTomeru = soukoMachi() ? '読み込み中です' : (soukoNG() ? 'クラウドに つながりません' : '');
-    var confirmBtn='<div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:14px 0 4px"><button class="btn-primary" data-confirm-month'+((prefMiss.missingCount||soukoTomeru)?' disabled':'')+' style="flex:0 0 auto;padding:11px 18px;font-size:14px">今月を確定（'+(soukoTomeru?soukoTomeru:(prefMiss.missingCount?'県が未選択'+prefMiss.missingCount+'名':'台帳・年調に反映'))+'）</button>'
+    /* ★★「今月を確定」も 下に 貼り付く★★（2026-09-25 司さんの 条件・上の 帯と 同じ 訳）
+       ★背景を 必ず 持たせる★＝持たせないと ★下の 札が 透けて 字が 重なる★
+       ★`bottom:0`★＝窓の 一番 下／`z-index` は 上の 帯と 同じ 30 */
+    var confirmBtn='<div style="position:sticky;bottom:var(--bn-h,0px);z-index:29;background:#F0FAF4;border-top:1px solid #C8ECD8;display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:14px 0 0;padding:10px 0 8px"><button class="btn-primary" data-confirm-month'+((prefMiss.missingCount||soukoTomeru)?' disabled':'')+' style="flex:0 0 auto;padding:11px 18px;font-size:14px">今月を確定（'+(soukoTomeru?soukoTomeru:(prefMiss.missingCount?'県が未選択'+prefMiss.missingCount+'名':'台帳・年調に反映'))+'）</button>'
       +(cnt.need>0?'<span style="font-size:11px;color:#92500A;font-weight:700;white-space:nowrap">未確認 '+cnt.need+'名</span>':'<span style="font-size:11px;color:#333333;font-weight:700;white-space:nowrap">✓ 確認済</span>')
       /* ★この月の確定を 取り消す★（2026-09-07 司さん「やって」）
          ★確定済みの 月にだけ 出す★＝押せない物を 並べない。
@@ -2514,7 +2532,20 @@
          ★確定済みかは monthFixedInfo() 1か所から 取る★＝入力画面の 札（下書き／確定済）や
          「Web明細で公開」の 可否と ★同じ物差し★を 使う（食い違わせない）。 */
       +(monthFixedInfo().fixed?'<button class="btn-ghost" data-undo-month style="padding:9px 14px;font-size:12px;white-space:nowrap">この月の確定を取り消す</button>':'')
-      +'<span style="flex:1 0 100%;font-size:10px;color:#555555"><b>保存は自動</b>です。「確定」は全員を確認済みにし、<b>賃金台帳・年末調整の集計対象</b>として今月を記録し、<b>従業員のWeb明細に自動公開</b>します（従業員はいつでも閲覧可・あとで直せます）。</span></div>';
+      /* ★★重い 事は ★アプリの 警告の 作法★で 出す★★（2026-09-25 司さん
+           「★ルール通り 警告のときみたいに やれや★」／「★どんなにやっとるか コード確認しろ★」）
+         ★コードを 見た★ … この アプリの 警告は ★全部 `.cr-warn`／`.sh-warn` の 箱★
+           （`app.js:1064` 休業手当・`:1201` 偽装請負・`:1525` 削除できない・`:2561` 最低賃金 …）
+           ＝★⚠ ＋ 橙（地 #fff8e1・字 #92500A・枠 #F4D8A8）の 箱★で 出す。
+         ★前★ … この 説明は ★10px の 灰色（#555555）の 字★だった
+           ＝「全員を 確認済みに する」「★従業員の Web明細に 自動公開★」という
+             ★押したら 客の 外へ 出る 事★を ★一番 目立たない 字★で 書いていた。
+           ＝★『理由を 灰色に するだけで 言わないのは ×』（2026-09-05 指示役の 裁定）★の 同じ型。
+         ★今★ … ★同じ 箱（`.cr-warn`）に 寄せる★＝★他の 警告と 同じ 顔★
+           （★新しい 見た目を 作って いません＝台帳を 増やさない★） */
+      +'<div class="cr-warn" style="flex:1 0 100%;margin-top:0">⚠ 「確定」を押すと、<b>その月の全員が確認済み</b>になり、'
+      +'<b>賃金台帳・年末調整の集計対象</b>として記録され、<b>従業員のWeb明細に自動公開</b>されます'
+      +'（従業員はいつでも閲覧可・あとで直せます）。<b>保存は自動</b>なので、確定しなくても入力は消えません。</div></div>';
     /* ★倉庫の 答えが 来るまで 人の 一覧を 描かない★（案D）＝★二度 描かないので 1pxも 動かない★
        ★空の 一覧を 出さない＝「0人」に 見せない★（読み込み中／つながらない と はっきり 出す） */
     if(soukoMachi()||soukoNG()){
@@ -2994,7 +3025,10 @@
   }
   // 賃金台帳(年間・従業員別・確定済み月から)
   function chinginDaichoHTML(L, year){
-    var CDm=CD(); var note='<p class="hint" style="margin:0 0 10px">「今月を確定」で保存した月だけ反映（労基法108条の賃金台帳）。<span class="help-i" data-help="chingindaicho">💡</span>横スクロール可。<button class="btn-ghost" data-choxlsx="daicho" style="margin-left:8px;padding:4px 10px;font-size:11px">Excel</button></p>';
+    /* ★字も 直した（2026-09-25）★ … 前は「★『今月を確定』で保存した月だけ反映★」
+   ＝★1人ずつの「確認」は 出ない★という 意味だったが、司さんの 決めで ★1人ずつでも 出る★ように した。
+   ⇒ ★画面の 字と 実物を 食い違わせない★（[[feedback_kaeta_tsumori_wa_dashi_no_ji_de_tashikameru]]） */
+    var CDm=CD(); var note='<p class="hint" style="margin:0 0 10px">「確認済」にした人・月が反映されます（労基法108条の賃金台帳）。<span class="help-i" data-help="chingindaicho">💡</span>横スクロール可。<button class="btn-ghost" data-choxlsx="daicho" style="margin-left:8px;padding:4px 10px;font-size:11px">Excel</button></p>';
     if(!L.length) return note+'<div class="card"><p class="hint">従業員がいません。</p></div>';
     var months=[]; for(var mm=1;mm<=12;mm++)months.push(mm);
     var cards=L.map(function(row){ var t=CDm.ledgerTotals(row), lab=CDm.ledgerLabels(row);
@@ -5660,9 +5694,17 @@
           e.target.checked=false;
           uiAlert(PW().prefMissingText());   /* ★文は lib 1か所★（同じ事を 2か所に 書かない・2026-09-03） */
           return; }
-        // ★確定前に現在値のスナップショットを保存してから凍結★(一括「今月を確定」と同じ順)。
-        //  先に確定するとsaveMonthlyPayslipsが確定済みをスキップし当月slipが未保存になる不具合を防ぐ。
-        try{ saveMonthlyPayslips(); }catch(_){} setConfirm(emc.id, true); renderInput(); persistSave(); return; }
+        /* ★★2026-09-25 直した（司さん「1人だけ修正の時も わざわざ 全員確定せないかんのか？」）★★
+           ★前★ … `saveMonthlyPayslips()`（★force 無し★）→ `setConfirm(true)` の順
+             ⇒ ★1回目は まだ 確定前なので `confirmed:false` で 書き★、
+               `persistSave()` の 末尾の 2回目は ★確定済みなので 凍結で スキップ★
+             ⇒ ★倉庫は `confirmed:false` の まま＝賃金台帳・年末調整に 出ない★（実測 8→8）
+             ★覚書には「一括『今月を確定』と 同じ順」と 書いて あったが、
+               ★一括は `force=true`・こちらは 無し★＝★順は 同じでも 結果が 違った★
+           ★今★ … ★先に 確定を 立て、その人 1人だけ 名指しで 書く★
+             ＝★`confirmed:true` で 倉庫に 届く★／★他の 人の 確定済みの 月には 触らない★
+           ★Web明細への 公開は これまで どおり「今月を確定」だけ★（★1人の 確認では 公開しない★） */
+        setConfirm(emc.id, true); try{ saveMonthlyPayslips(false, emc.id); }catch(_){} renderInput(); persistSave(); return; }
       if(e.target.dataset.reviewonly!=null){ state._reviewOnly=e.target.checked; renderInput(); return; }
       var ivw=e.target.closest('[data-ivw]'); if(ivw){ state.inputView=ivw.dataset.ivw==='table'?'table':'card'; renderInput(); if(window.persistSaveDebounced)persistSaveDebounced(); return; }
       /* ★この月の確定を 取り消す★（2026-09-07 司さん「やって」）
@@ -6117,7 +6159,18 @@
   function naoshitaKa(ym, id){ return !!(state._naoshita && state._naoshita[ym] && state._naoshita[ym][id]); }
   function naoshitaKesu(ym, id){ if(state._naoshita && state._naoshita[ym]) delete state._naoshita[ym][id]; }
 
-  function saveMonthlyPayslips(force){
+  /* ★★`hitoriId` を 渡すと ★その人 1人だけ★ 書く★★（2026-09-25 司さん「1人だけ修正の時も わざわざ 全員確定せないかんのか？」）
+     ★前は どうだったか（実測 2026-09-24）★
+       個人の「確認」の 箱は `saveMonthlyPayslips()`（★force 無し★）を ★確定を 立てる 前★に 呼び、
+       その後 `persistSave()` の 末尾で もう一度 呼ばれるが ★今度は 確定済みなので 凍結で スキップ★
+       ⇒ ★倉庫の 明細は `confirmed:false` の まま 誰も 書き直さない★
+       ⇒ ★賃金台帳・年末調整・算定基礎届は `confirmed!==false` で 絞る★ので ★その人は 出ない★
+       ⇒ 実測＝★倉庫の 確定 8→8（2回とも）★／`confirmed=true` 18行は ★全部「今月を確定」の 分★
+     ★なぜ `force` を そのまま 使わないか★
+       `force` は ★その月の 全員★の 凍結を 解く＝★他の 人の 確定済みの 月まで 今の マスタで 上書き★する。
+       ⇒ ★1人 直したいだけなのに 他人の 紙が 変わる★＝★D1 で 止めた 事故に 戻る★
+     ⇒ ★★`hitoriId` の 人 ★だけ★ 凍結を 解いて 書く★★（他の 人は 今まで どおり） */
+  function saveMonthlyPayslips(force, hitoriId){
     if(!(window.Store&&Store.savePayslip)) return; var ym=state.month; if(!ym) return;
     var method=(state.company||{}).paymentDaysMethod||'';
     var conf=(state.confirmed&&state.confirmed[ym])||null;
@@ -6133,7 +6186,8 @@
            ・★打った 時だけ 印を 付ける★（`naoshitaShirushi`＝入力画面の 打ち込みの 所）
            ・★印が 在る 人だけ 凍結を 解く★
          ⇒ ★開くだけでは 今までどおり 動きません★（★測って 確かめた 事＝そのまま 守る★） */
-      if(!force && conf && conf[e.id] && !naoshitaKa(ym, e.id)) return; // 確定済み=凍結。★但し 人が 打った 人だけ 解く★
+      if(hitoriId && e.id!==hitoriId) return;   // ★1人だけ 書く時は その人 以外に 触らない★
+      if(!force && !(hitoriId && e.id===hitoriId) && conf && conf[e.id] && !naoshitaKa(ym, e.id)) return; // 確定済み=凍結。★但し 人が 打った 人／名指しの 1人だけ 解く★
       var _nao = !!(conf && conf[e.id] && naoshitaKa(ym, e.id));   /* ★確定済みを 人が 打った 人★ */
       var r=compute(e);
       var days=(window.PayrollCalc&&PayrollCalc.calcPaymentDays)?PayrollCalc.calcPaymentDays(e,ym,method):0;
@@ -6243,11 +6297,41 @@
         // no-user=未ログイン=クラウド対象外(ローカル保存が正)→警告しない。ログイン中の実失敗のみ警告。
         if(r&&r.ok===false&&r.reason==='conflict'){ // ★楽観ロック: 上書きせず警告(データ消失防止)。neverSynced=別端末更新でなく"クラウド未読込"→文言を分ける
           setS(r.neverSynced ? '⚠ クラウドに保存済みのデータがあります（未読込）' : '⚠ 別の端末で更新されました（クラウド未保存）');
-          if(!state._conflictPrompted){ state._conflictPrompted=true;
+          /* ★★★客の 行き止まりを 直す★★★（2026-09-28・実測から）
+             ★前の 形★ … 
+                ⇒ ★★１回 訊いて「いいえ」を 押したら ★二度と 訊かない★★
+                ⇒ ★その後 保存は 全部 失敗／出るのは 小さな ⚠ の 字だけ★
+                ⇒ ★★★お客さんは 何も 保存できない まま 気づかない★★★
+             ★実測（なぜ 続くか）★
+                ★１回 conflict に なると 控え（）が
+                  ★二度と 新しく ならない★★（ の conflict の 道に
+                  ★控えを 書く 所が 一つも 無い★）
+                ★実物（09-27・同じ 走り）★ … ★覆い 65回／控えは 65回とも 同じ 値★
+                ⇒ ★★「一度 転んだら 開き直すまで 保存できない」★★
+             ★直し（★お金の 計算には 触りません★）★
+                ★★逃げ道を 毎回 出す★★＝★訊くのは 連続しないよう 間を 空ける★
+                ★★でも ★二度と 訊かない★のは やめる★★
+             ★間を 空ける 訳★ … ★保存は 0.5秒ごとに 走る★
+                ⇒ ★毎回 訊くと ★箱が 出たままに なる★★
+                ⇒ ★★ー★前の 箱を 閉じて から＋30秒 空いたら また 訊く★★ */
+          var _cfIma = Date.now();
+          var _cfMae = state._conflictAskedAt || 0;
+          var _cfAku = 30000;   /* ★間を 空ける ms（★箱が 出たままに ならない 為★） */
+          if(!state._conflictHako && (_cfIma - _cfMae) > _cfAku){
+            state._conflictAskedAt = _cfIma;
+            state._conflictHako = true;   /* ★箱が 出て いる 間は 重ならせない★ */
             var _cfMsg = r.neverSynced
               ? 'クラウドにこの会社の保存済みデータがあります（まだ読み込めていません）。\n\n最新を読み込みますか？\n・はい＝クラウドの最新を読込（この端末の未保存の編集は失われます）\n・いいえ＝このまま（ローカルには残ります・クラウド保存は保留）'
               : 'この会社の設定・従業員データが、別の端末で更新されています。\n\n最新を読み込みますか？\n・はい＝最新を読込（この端末の未保存の編集は失われます）\n・いいえ＝このまま（ローカルには残ります・クラウド保存は保留）';
-            uiConfirm(_cfMsg).then(function(ok){ if(ok) location.reload(); });
+            uiConfirm(_cfMsg).then(function(ok){
+              state._conflictHako = false;   /* ★箱が 閉じた★ */
+              if(ok) location.reload();
+            }, function(_e){
+              /* ★★黙って 飲み込まない★★＝★箱が 転んだら 字に 出す★
+                 ★旗を 戻す のは 必須★（★戻さないと 二度と 訊けない★） */
+              state._conflictHako = false;
+              console.error('★覆いの 箱が 出せません★', _e);
+            });
           }
         }
         else if(r&&r.ok===false&&r.reason!=='no-user'){ setS('⚠ クラウド未保存（'+(r.reason||'通信エラー')+'）'); }
@@ -6392,6 +6476,23 @@
   // 変更を自動保存(入力/選択/クリック後・離脱時)
   ['input','change','click'].forEach(function(ev){ document.addEventListener(ev, persistSaveDebounced, true); });
   window.addEventListener('beforeunload', persistSave);
+  /* ★★下の 帯（`.botnav`）の 高さを 字で 置く★★（2026-09-25）
+     ★訳★ … 下に 貼り付く 物（`bottom:0`）は ★下の 帯の 裏に 回ります★
+       （09-25 実測＝「今月を確定」の 下の 警告の 箱が ★帯に 切られて いた★）
+     ★高さは 決め打ちに しない★ … `.botnav` は `padding-bottom:env(safe-area-inset-bottom)`＝
+       ★端末と 画面の 幅で 変わる★（門の 出しでも 帯 53／54／59px と 違って いた）
+     ⇒ ★実物を 測って `--bn-h` に 入れる★／★幅が 変わったら 測り直す★
+     ★`--envbar-h`（テスト環境の 帯）と 同じ 手★＝1か所で 測って 字に する。 */
+  (function(){
+    function bnFit(){
+      var n=document.querySelector('.botnav');
+      var h=n?Math.round(n.getBoundingClientRect().height):0;
+      try{ document.documentElement.style.setProperty('--bn-h', h+'px'); }catch(_){ /* 古い browser */ }
+    }
+    bnFit();
+    window.addEventListener('resize', bnFit);
+    if(window.visualViewport) window.visualViewport.addEventListener('resize', bnFit);
+  })();
   if(location.hash.indexOf('emp')>=0){ var b=$('#set-seg .seg-b[data-set="emp"]'); if(b)b.click(); if(state.employees[0]){state.open[state.employees[0].id]=true;} renderEmpMaster(); }
   if(location.hash==='#emphelp'){ openHelp('fuyou'); }
   if(location.hash==='#carcommute'){ var ec=state.employees[0]; if(ec){ec.commuteType='car';ec.commuteKm='12';ec.commute='15000';state.open[ec.id]=true;} var b2=$('#set-seg .seg-b[data-set="emp"]'); if(b2)b2.click(); renderEmpMaster(); }

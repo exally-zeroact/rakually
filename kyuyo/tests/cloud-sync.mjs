@@ -15,7 +15,7 @@ function ok(c, m) { if (!c) throw new Error(m || 'expected truthy'); }
 // ── Supabaseモック(呼び出しを記録・失敗も注入できる) ──
 function makeMock(opts) {
   opts = opts || {};
-  const calls = { companyUpsert: [], empUpsert: [], deletes: [], selects: [], slipUpsert: [] };
+  const calls = { companyUpsert: [], empUpsert: [], deletes: [], selects: [], slipUpsert: [], getUser: [] };
   let serverEmpIds = (opts.serverEmpIds || []).slice();
   // dbFormatモード=実Postgres(timestamptz)を模擬: 送られたISO(…Z)を保存時に…+00:00へ書式変換し、読み戻しはその値を返す。
   //  ＝JS生成文字列(…Z)を競合基準にすると読み戻し(…+00:00)と毎回不一致になる本番バグを再現する。
@@ -58,6 +58,45 @@ function makeMock(opts) {
   function from(table) {
     return {
       upsert: (d) => {
+        /* ★★`empDelay`＝★`pay_employees` の 書きだけ 遅らせる★★★（2026-09-28）
+           ★訳★ … 束は 3本（会社の 書き／人の 書き／差分削除）で、
+             ★控えを 新しく するのが 3本 全部 返って から★だと
+             ★①が 倉庫に 着いた 後 ②が 返るまで★
+             『★倉庫は 新しい／控えは 旧い★』窓が 開く。
+           ⇒ ★★その 窓を 試験で 作る には ②を 遅らせる しか ない★★ */
+        if (table === 'pay_employees' && opts.empDelay) {
+          calls.empUpsert.push(d);
+          return new Promise((r) => setTimeout(() => r({ error: null, data: null }), opts.empDelay));
+        }
+        /* ★★`companyReplyDelay`＝★会社の 書きの ★返りだけ★ 遅らせる★★★（2026-09-28）
+           ★訳（指示役1 の ③）★ … `pay_companies` の POST の 行き帰りは ★実測 627〜643ms★。
+             ★倉庫は すぐ 書き換わる／端末が 知るのは その 後★
+           ⇒ ★★控えを どこで 入れても 残る 窓＝★ここ★★★
+           ★倉庫の 値（`storedUA`）は ★同期的に★ 上げる／★返りだけ 遅らせる★ */
+        /* ★★`companyStoredButError`＝★倉庫には 書けた／返りは 失敗★★★（2026-09-28）
+           ★なぜ 要るか★ … ★門（控えが null の 時は 名簿を 見ない）に ★辿り着く 道★★
+             ・弾かれた 保存は 名簿に 何も 入れない（送る 前に 弾かれる）
+             ・書けて 返れば ★控えが 埋まる★
+             ⇒ ★★『名簿に 在る／控えは null』は ★書けたのに 返りが 失敗した 時★だけ★★
+             ＝★通信が 落ちた／途中で 切れた★＝★実際に 起きる★
+           ★これが 無いと ㋓は ★門を 外しても 緑★＝★何も 見て いません★★（★09-28 に 実測★） */
+        if (table === 'pay_companies' && opts.companyStoredButError) {
+          calls.companyUpsert.push(d);
+          if (d && d.updated_at != null && opts.dbFormat) storedUA = dbFmt(d.updated_at);
+          const res = { error: { message: '返りが 落ちた（倉庫には 書けて いる）' }, data: null };
+          const p2 = Promise.resolve(res);
+          p2.select = () => ({ single: () => p2, maybeSingle: () => p2, then: (f, r2) => p2.then(f, r2) });
+          return p2;
+        }
+        if (table === 'pay_companies' && opts.companyReplyDelay) {
+          calls.companyUpsert.push(d);
+          let rUA = null;
+          if (d && d.updated_at != null) { rUA = dbFmt(d.updated_at); if (opts.dbFormat) storedUA = rUA; }
+          const res = { error: null, data: rUA != null ? { updated_at: rUA } : null };
+          const slow = new Promise((r) => setTimeout(() => r(res), opts.companyReplyDelay));
+          slow.select = () => ({ single: () => slow, maybeSingle: () => slow, then: (f, r2) => slow.then(f, r2) });
+          return slow;
+        }
         /* ★明細の 書き込みも 数える★（2026-09-15＝孤児の 元を 縛る為） */
         (table === 'pay_companies' ? calls.companyUpsert
           : table === 'pay_payslips' ? calls.slipUpsert : calls.empUpsert).push(d);
@@ -73,12 +112,33 @@ function makeMock(opts) {
       delete: () => ({ in: (col, ids) => { calls.deletes.push(ids); return Promise.resolve({ error: null }); } }),
     };
   }
-  return { from, auth: { getUser: () => Promise.resolve({ data: { user: { id: 'u1' } } }) }, __calls: calls };
+  /* ★`opts.noUser`★ … ★入口を 通って いない 端末★（既定＝通って いる）
+     ＝★『読み込みが 始まる 前の 隙』は ★入口を 通って いる時だけ★ 待つ★ 事を 見る為 */
+  return {
+    from,
+    /* ★★`getUser` を 呼んだ 回数も 数える★★（2026-09-28）
+       ★訳★ … `getUser()` は ★倉庫へ 問い合わせます★。
+         ★読み込み前の 隙を 待つ 輪★が 刻みごとに 呼ぶと
+         ★1回の 保存で 何十往復★に なる ⇒ ★客の 通信が 増える★
+       ⇒ ★★数えないと 気づけません★★（`kaisuu.getUser`） */
+    auth: {
+      getUser: () => {
+        calls.getUser.push(1);
+        return Promise.resolve({ data: { user: opts.noUser ? null : { id: 'u1' } } });
+      },
+    },
+    __calls: calls,
+  };
 }
 
-function loadStore(mock) {
+function loadStore(mock, wopts) {
   const dom = new JSDOM('<!doctype html><body></body>', { runScripts: 'dangerously', url: 'http://localhost/', pretendToBeVisual: true });
   const win = dom.window;
+  /* ★★試験では 待つ 上限を ★短く★ する★★（2026-09-28）
+     ★訳★ … 本物は 8秒。★`cloudLoadState` を 呼ばない 試験は 毎回 8秒 待つ★＝★束が 遅くなる★
+     ★上限の ★値★ は 契約では ありません★（★機構＝『永久に 待たない』は ★隙②★ が 見る★）
+     ⇒ ★既定 300ms／要る 試験だけ 明に 渡す★ */
+  win.__YOMI_MACHI_MS__ = (wopts && typeof wopts.machiMs === 'number') ? wopts.machiMs : 300;
   win.SUPA = { url: 'https://x.supabase.co', key: 'anon' };
   win.supabase = { createClient: () => mock };
   const el = win.document.createElement('script');
@@ -339,6 +399,155 @@ runs.push(T('P0-maboroshi③: ★読み込みを していない時は そのま
      ★saveHold を null に 戻すかは 客には 出ません★（約束そのものは 必ず 済む）。
      ★見張りは 客に 起きる 事で 縛る★＝中の 変数の 姿では 縛らない。
    ★保留が「1回だけ 出る」事は 別の 試験が 既に 見ています★＝★P0-race②★（この 上に 在る）。 */
+
+/* ★★★読み込みが 始まる ★前★ の 隙（2026-09-28）★★★
+   ★因（8日 追って 確定した 物）★
+     `kyuyo/js/auth.js` の afterLogin は
+       ① 使える／止まって いる を 読む（★倉庫へ 1往復★）
+       ② `PayslipReloadCloud()` … ここで 初めて `cloudLoadState()` が 呼ばれる
+     ⇒ ★①の 間は `saveHold` が まだ 立って いない＝誰も 保存を 止めて いない★
+   ★実測（09-27）★ … 覆い 14:55:23.692（hikae=null／neverSynced=true）
+                    読み込み kaime=1 14:55:24.545（★0.853秒 後★）
+   ★1回 conflict に なると 控えは 二度と 新しく ならない★（conflict の 道は doSave に 行かない）
+     ⇒ ★開き直すまで 全部 conflict★（実測＝覆い 65回／控えは 65回とも 同値）
+   ★★ここで 縛る 物★★ … ⑴隙が 閉まる ⑵★永久に 待たない★ */
+runs.push(T('★隙①: 読み込みを 呼ぶ ★前★ に 保存が 走っても 誤 conflict に しない', async function () {
+  /* 倉庫に 既に データが 在る（companyUpdatedAt 在り）＝★前は ここで 必ず conflict★ */
+  const mock = makeMock({ companyUpdatedAt: '2026-09-27T13:23:47.938+00:00', loadDelay: 120, companyData: { name: 'クラウドのA' } });
+  const Store = loadStore(mock, { machiMs: 5000 });
+  Store.setSnapshotFn(() => SNAP);
+  const hozon = Store.cloudSaveState(SNAP);       // ★読み込みより 先★
+  await new Promise(r => setTimeout(r, 60));      // ★①の 往復ぶん 遅れて★
+  const yomi = Store.cloudLoadState();            // ★ここで やっと saveHold が 立つ★
+  const [r] = await Promise.all([hozon, yomi]);
+  ok(!(r && r.reason === 'conflict'), '★読み込み前の 保存が conflict に なった★（出たのは ' + JSON.stringify(r) + '）');
+  const m = Store.machiNoKazu();
+  ok(m.kai > 0, '★待って いません＝隙の 道を 通って いない＝この 試験は 何も 見て いない★（' + JSON.stringify(m) + '）');
+  ok(m.kire === 0, '★待ち切れた＝上限を 超えた★（' + JSON.stringify(m) + '）');
+  /* ★★待った ms も 縛る★★（2026-09-28・指示役1 の ②）
+     ★訳★ … ★これは 客が 開いた 直後の 道★＝★長いと『押したのに 何も 起きない』に 見える★
+     ⇒ ★回数だけでは 客の 速さは 分かりません★ */
+  ok(m.ms.length > 0, '★待った ms を 1件も 控えて いない＝客の 速さが 出せない★（' + JSON.stringify(m) + '）');
+  ok(m.msSaidai != null && m.msSaidai < 2000, '★待ちが 長すぎる（客に 出ます）★（最大 ' + m.msSaidai + 'ms）');
+}));
+
+runs.push(T('★隙②: 読み込みが ★来なくても★ 永久に 待たない（上限で 今までの 道に 出る）', async function () {
+  /* ★`cloudLoadState` を ★一度も 呼ばない★★＝読み込みが 来ない 端末 */
+  /* ★★上限は ★刻み（200ms）の 10倍★ に する★★
+     ＝★刻みが 1回しか 回らない 窓では ★下の『往復の 数』は 何も 見て いません★★
+       （★09-28 実測＝上限 400ms だと 刻み 2回＝壊しても 緑だった★） */
+  const mock = makeMock({ companyUpdatedAt: '2026-09-27T13:23:47.938+00:00' });
+  const Store = loadStore(mock, { machiMs: 2000 });
+  Store.setSnapshotFn(() => SNAP);
+  const t0 = Date.now();
+  const r = await Store.cloudSaveState(SNAP);
+  const kakatta = Date.now() - t0;
+  ok(kakatta < 6000, '★上限で 出て いません＝永久に 待つ 恐れ★（' + kakatta + 'ms）');
+  ok(r && r.ok === false && r.reason === 'conflict', '★上限の 後は 今までどおり conflict で 止める★（出たのは ' + JSON.stringify(r) + '）');
+  const m = Store.machiNoKazu();
+  ok(m.kire > 0, '★待ち切れた印が 立って いない★（' + JSON.stringify(m) + '）');
+  ok(m.kai >= 8, '★刻みが 足りない＝下の『往復の 数』が 何も 見て いません★（待った ' + m.kai + '回）');
+  /* ★★待つ 輪が ★通信を 増やして いない★★★（2026-09-28・★踏みかけた 穴★）
+     `curUid()` は `getUser()`＝★倉庫へ 問い合わせる★。
+     ★刻み 200ms × 上限 8秒★ で 呼び直すと ★1回の 保存で 最大 40往復★ に なる。
+     ⇒ ★★『待つ』の 代金を 数えないと 気づけません★★
+     ★1つの 保存＝★入口を 訊くのは 1回／実際に 書く時に もう 1回★★ ⇒ ★多くて 3回★ */
+  ok(mock.__calls.getUser.length <= 3,
+    '★待つ 輪が 入口を 何度も 訊いて います＝客の 通信が 増えます★（'
+      + mock.__calls.getUser.length + '回／待った ' + m.kai + '回）');
+}));
+
+runs.push(T('★隙③: 入口を 通って いない時は ★1回も 待たない★（ログイン前を 遅くしない）', async function () {
+  const mock = makeMock({ noUser: true, companyUpdatedAt: '2026-09-27T13:23:47.938+00:00' });
+  const Store = loadStore(mock, { machiMs: 5000 });
+  const t0 = Date.now();
+  await Store.cloudSaveState(SNAP);
+  ok(Date.now() - t0 < 1000, '★入口を 通って いないのに 待った★');
+  ok(Store.machiNoKazu().kai === 0, '★待った 回数が 0 でない★（' + JSON.stringify(Store.machiNoKazu()) + '）');
+}));
+
+/* ★★★㋑＝★読んだ 後★ に 自分の 書きで 自分が 弾かれる 窓★★★（2026-09-28・★実測から★）
+   ★実物（WebKit run `36343338113`）★
+     `★覆いの その場（2回目）★ souko=…19:15:35.12 ★hikae=…19:15:34.71★
+        onajiShunkan=false ★neverSynced=false★`
+     ⇒ ★読み込みは 済んで いる／★控えが 0.41秒 古い だけ★★
+   ★指示役1 が 数えた 分母（同じ 走り）★
+     保存(POST) ★788本★／★重なった 組 10455組★／★同時に 飛んで いた 最大 45本★
+     ★『自分で 自分を 弾ける 組』1組★（★同じ 束の `pay_employees` が まだ 返って いない★）
+   ★★ここで 縛る 物★★
+     ★束の 他の 書きが 遅れても ★次の 保存は 誤 conflict に しない★★ */
+runs.push(T('★㋑: 束の 他の 書きが 遅れても ★次の 保存を 誤 conflict に しない★（自分で 自分を 弾かない）', async function () {
+  /* ★dbFormat＝倉庫が 書いた 値を 読み戻す（本物と 同じ 形）／`empDelay`＝②だけ 300ms 遅らせる★
+     ★倉庫に 先に 行が 在る★＝読み込みで 控えが ★null では なく なる★
+     ⇒ ★★壊した 時の 字が 実物と 同じ `neverSynced=false` に なる★★
+       （実物＝WebKit run `36343338113` の 覆い 2回目） */
+  const mock = makeMock({ dbFormat: true, empDelay: 300, companyUpdatedAt: '2026-09-27T19:15:00.000+00:00', companyData: { name: 'A' } });
+  const Store = loadStore(mock);
+  /* ★先に 1回 読んで おく★＝★`neverSynced` の 道を 通らない＝★㋑ だけを 見る★★ */
+  await Store.cloudLoadState();
+  /* ★★★1回目を ★待たない★★★＝★待つと 窓が 閉じて この 試験は 何も 見ません★
+     （★09-28 実測＝`await` して いた 形は ★わざと 壊しても 緑★だった★） */
+  const ichiP = Store.cloudSaveState(SNAP);        /* ★①は すぐ 着く／②は 300ms 掛かる★ */
+  await new Promise((r) => setTimeout(r, 120));    /* ★①の 後・②の 前＝★窓の 中★★ */
+  const niP = Store.cloudSaveState(SNAP);          /* ★2回目が ここで `select updated_at` する★ */
+  const [ichi, ni] = await Promise.all([ichiP, niP]);
+  ok(ichi.ok, '★1回目が 保存できて いない★（' + JSON.stringify(ichi) + '）');
+  const h = Store.hikaeNoKazu();
+  ok(h.hayaku > 0, '★束を 待たずに 控えた 回数が 0＝この 試験は 何も 見て いません（未測定）★（' + JSON.stringify(h) + '）');
+  ok(!(ni && ni.reason === 'conflict'),
+    '★★自分の 書きで 自分が 弾かれました★★（出たのは ' + JSON.stringify(ni) + '）');
+  ok(ni.ok, '★2回目が 保存できて いない★（' + JSON.stringify(ni) + '）');
+}));
+
+/* ★★★㋒＝★控えを どこで 入れても 残る 窓★（★行き帰りの ずれ★）★★★（2026-09-28・指示役1 の ③）
+   ★実測（指示役1）★ … `pay_companies` GET ★208〜239ms★／POST ★627〜643ms★
+   ⇒ ★倉庫が 書いた 瞬間と 端末が 知る 瞬間は ★必ず ずれる★★
+   ⇒ ★★『いつ 控えるか』では 解けない＝『★何を 比べるか★』を 変えた★★
+   ★ここで 縛る 物★ … ★会社の 書きの ★返りが 遅れても★ 次の 保存を 誤 conflict に しない★ */
+runs.push(T('★㋒: 会社の 書きの ★返りが 遅れても★ 次の 保存を 誤 conflict に しない（残った 窓）', async function () {
+  const mock = makeMock({ dbFormat: true, companyReplyDelay: 400, companyUpdatedAt: '2026-09-27T19:15:00.000+00:00', companyData: { name: 'A' } });
+  const Store = loadStore(mock);
+  Store.setSnapshotFn(() => SNAP);
+  await Store.cloudLoadState();                    /* ★先に 読む＝控えが null では なく なる（門を 通る）★ */
+  const ichiP = Store.cloudSaveState(SNAP);        /* ★倉庫は すぐ 上がる／返りは 400ms 後★ */
+  await new Promise((r) => setTimeout(r, 150));    /* ★★返りの 前＝残った 窓の 中★★ */
+  const niP = Store.cloudSaveState(SNAP);
+  const [, ni] = await Promise.all([ichiP, niP]);
+  const o = Store.okuttaNoKazu();
+  ok(o.toshita > 0, '★自分が 送った 値だから 通した 回数が 0＝この 試験は 何も 見て いません（未測定）★（' + JSON.stringify(o) + '）');
+  ok(!(ni && ni.reason === 'conflict'),
+    '★★返りの 前に 自分で 自分を 弾きました★★（出たのは ' + JSON.stringify(ni) + '）');
+}));
+
+/* ★★★㋓＝★門（指示役1 が 止めた P0）★★★（2026-09-28）
+   ★名簿を そのまま 使うと こう なる★
+     ㋐読み込む 前の 端末（控え null・中身は ほぼ 空）が 保存 → ★T1 を 送る★
+     ㋑同じ 端末が もう 一度 保存 → `cloudUA=T1`／控えは ★まだ null★
+        ⇒ ★T1 は 自分の 名簿に 在る★ ⇒ ★通って しまう★
+     ⇒ ★★空の 端末が 本番の 確定印・年末調整・会社設定を 黙って 巻き戻す★★
+   ★ここで 縛る 物★ … ★読み込む 前は ★2回目も 必ず 弾く★★ */
+runs.push(T('★㋓: ★倉庫には 書けて 返りが 落ちた★ 後でも ★読んで いない 端末は 必ず 弾く★（巻き戻さない）', async function () {
+  /* ★★この 形で なければ 門を ★1回も 通りません★★（★09-28 実測＝門を 外しても 緑だった★）
+     ★訳★ … ⑴★弾かれた 保存は 名簿に 何も 入れない★（送る 前に 弾かれる）
+             ⑵★書けて 返れば 控えが 埋まる★
+     ⇒ ★★『名簿に 在る／控えは null』は ★倉庫には 書けて 返りが 落ちた 時★だけ★★
+     ★倉庫は 空から 始める★＝1回目は 弾かれずに ★送れる★（＝名簿に 入る）
+     ★上限を 短く★＝『読み込み前の 隙』の 待ちで 時間を 食わない（★別の 用件★） */
+  const mock = makeMock({ dbFormat: true, companyStoredButError: true });
+  const Store = loadStore(mock, { machiMs: 100 });
+  Store.setSnapshotFn(() => SNAP);
+  const ichi = await Store.cloudSaveState(SNAP);
+  ok(ichi && ichi.ok === false, '★1回目が 失敗に なって いない＝この 試験の 前提が 崩れて います★（' + JSON.stringify(ichi) + '）');
+  ok(mock.__calls.companyUpsert.length === 1, '★1回目が 送られて いない＝名簿が 空＝門を 通りません★（' + mock.__calls.companyUpsert.length + '本）');
+  const o = Store.okuttaNoKazu();
+  ok(o.meibo > 0, '★名簿が 空＝この 試験は 門を 1回も 通りません（未測定）★（' + JSON.stringify(o) + '）');
+  /* ★★2回目★★＝倉庫には T1 が 在る／★控えは まだ null★／★名簿には T1 が 在る★ */
+  const ni = await Store.cloudSaveState(SNAP);
+  ok(ni && ni.ok === false && ni.reason === 'conflict',
+    '★★読んで いない 端末が 通りました＝本番の 確定印・年調・会社設定を 巻き戻せます★★（出たのは ' + JSON.stringify(ni) + '）');
+  ok(ni.neverSynced === true, '★`neverSynced` が 立って いない＝画面の 文言が 変わります★（' + JSON.stringify(ni) + '）');
+  ok(mock.__calls.companyUpsert.length === 1, '★2回目も 会社の 行を 書いて います＝巻き戻して います★（' + mock.__calls.companyUpsert.length + '本）');
+}));
 
 await Promise.all(runs);
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

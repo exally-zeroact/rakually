@@ -151,7 +151,197 @@
     // ★楽観ロック用: 最後に把握した pay_companies(設定=全置換で最も危険)の updated_at。
     //  読込時・自分の保存成功時に更新。保存前にクラウドの現在値と違えば「別端末が後から更新」=conflictで上書きしない。
     var lastCompanyUpdatedAt = null;
-    Store.cloudSaveState = function(state){
+    var _yomiKai = 0;   /* ★読み込みが 走った 回数（★測る 為だけ★） */
+
+    /* ★★★測る 為だけの 口 2つ★★★（2026-09-27に 一度 消し過ぎて 戻した）
+       ★㉕-2（「別の端末で更新されています」）の 因は ★未説明★。
+         外から 見えるのは 要求と 倉庫だけで、
+         ★conflict を 決めて いる 2つの 値は ★画面の 中の 閑し★★。
+       ⇒ ★★ここで 控えないと 因は 決まりません★★
+       ★CI でも 走ります★（★倉庫の 鍵が 要らない★）
+         ＝★★覆いが 実際に 出る 所で 測れます★★
+         （★手元では 8回 回して 覆い 0回＝★手元では 測れない★）
+       ★★値も 判じも 1文字も 変えて いません★★（★積むだけ★）
+
+       ★★一度 消し過ぎました★★
+         直列の 取り下げで 塔を まるごと 差し替えた 時、
+         ★同じ 塔の 中に 在った この 2つも 一緒に 消した★。
+         ★でも 使う 所は 残った★（`_uaAtta++` と `_conflictLog.push`）
+         ⇒ ★★`_uaAtta is not defined` で ★お金の 保存が 落ちた★★
+            実物 … `node kyuyo/tests/cloud-sync.mjs` ★★5 failed★★
+         ⇒ ★★網が 押す前に 止めました（赤 2段）★★＝★遠くへ 行って いません★
+       ★★学んだ 事：消す 時は『宣言・使う 所・読む 口』を 全部 数える★★ */
+
+    /* ★`|| now` に 落ちた 回数★（実測 09-27：保存 33回／返した 33回／★落ちた 0回★） */
+    var _uaAtta = 0, _uaNakatta = 0;
+    /* ★★束を 待たずに 控えた 回数★★（2026-09-28＝★『倉庫は 新しい／控えは 旧い』窓を 閉じた 回数★）
+       ★0 なら この 直しは ★1回も 効いて いません★＝★未測定★★ */
+    var _hikaeHayaku = 0;
+    Store.hikaeNoKazu = function(){
+      return { atta:_uaAtta, nakatta:_uaNakatta, zen:(_uaAtta + _uaNakatta), hayaku:_hikaeHayaku };
+    };
+    /* ★覆いの 控えを 外から 読む 口★
+       honsu（何回 出たか）／★onaji（★同じ 瞬間なのに conflict★）★／
+       chigau（本当に 別の 書き）／miyomi（まだ 読んで いない）／★最初の 3件の 字★ */
+    Store.ooiNoKazu = function(){
+      var a = Store._conflictLog || [];
+      return {
+        honsu: a.length,
+        onaji: a.filter(function(x){ return x.onajiShunkan; }).length,
+        chigau: a.filter(function(x){ return !x.onajiShunkan && !x.neverSynced; }).length,
+        miyomi: a.filter(function(x){ return x.neverSynced; }).length,
+        ji: a.slice(0, 3).map(function(x){ return x.ji; })
+      };
+    };
+    /* ★★★読み込みが 始まる ★前★ の 隙を 閉じる★★★（2026-09-28・★実測から★）
+       ★隙の 実物（`kyuyo/js/auth.js:42` afterLogin）★
+         ① `gateCheck()` …… ★倉庫へ 1往復★（★使える／止まって いる を 読む 棚★）
+            ＝★棚の 名前は ここに 書きません★（`tests/furui-namae.test.mjs` が
+              ★古い 名前の 本数を 数えて いる★＝覚書で 1件 増やすと ★偽の 赤★に なる）
+         ② `PayslipReloadCloud()` … ここで 初めて `cloudLoadState()` が 呼ばれ
+            ★`saveHold` が 立つ★（下の `cloudLoadState` の 末尾＝関数の 中で 同期的に 立つ）
+         ⇒ ★★①の 間は 誰も 保存を 止めて いません★★
+       ★実測（09-27・同じ 走り）★
+         14:55:23.692 … ★覆い★（`hikae=null` ／ `neverSynced=true`）
+         14:55:24.545 … 読み込み `kaime=1`（★0.853秒 ★後★★）
+         ⇒ ★★保存が 読み込みより 先に 走って いた★★
+       ★これが 何を 起こすか（★8日 追った 物★）★
+         1回 conflict に なると `lastCompanyUpdatedAt` は ★二度と 新しく ならない★
+         （conflict の 道は `doSave()` に 行かない＝控えを 書く 所を 通らない）
+         ⇒ ★★その後 開き直すまで 全部 conflict★★（実測＝★覆い 65回／控えは 65回とも 同値★）
+         ⇒ WebKit の 赤＝★覆いの 箱が ボタンの 上に 座る★
+            ⇒ 片づけが 押せない ⇒ 人が 1人 残る
+            ⇒ ★前の 数が 13→18→19→20 と 毎回 増えた★
+       ★★直し＝『まだ 一度も 読んで いない 間の 保存は 少し 待つ』★★
+         ★お金の 判じ（conflict に するか）は ★1文字も 変えて いません★★
+         ＝★待つだけ★／待ち切れたら ★今まで どおり★ の 道に 出る
+       ★永久に 待たない★＝★上限を 決める★（待ち続けると ★雲に 行かない★を 作る）
+       ★入口の 顔が 変わったら 窓を 引き直す★＝★ログインの 直後こそ 隙が 開く★ */
+    /* ★待つ 上限★（★見張りからは 短く できる★＝★上限そのものを 測れる ように する為★
+       ＝★見られない 物は 見張れない★／★変えられるのは ★待つ 長さ★だけ＝判じは 変わりません★） */
+    var YOMI_MACHI_MS = (typeof global.__YOMI_MACHI_MS__ === 'number') ? global.__YOMI_MACHI_MS__ : 8000;
+    var YOMI_KIZAMI_MS = 200;    /* ★刻み★ */
+    var _machiKara = null;       /* ★今の 窓の 始まり★ */
+    var _machiKai = 0;           /* ★待った 回数★ */
+    var _machiKire = 0;          /* ★待ち切れて 今まで どおりに 出た 回数★ */
+    var _machiUid = null;        /* ★最後に 見た「入口を 通って いるか」★（出しの為・判じには 使わない） */
+
+    /* ★★★自分が 送った `updated_at` の 名簿★★★（2026-09-28・指示役1 の ④）
+       ★★なぜ 控えの 位置を 変えるだけでは 足りないか（★指示役1 の 実測★）★★
+         `pay_companies` の 行き帰り … GET ★208〜239ms★／POST ★627〜643ms★
+         ⇒ ★★『倉庫が 書いた 瞬間』と『端末が 知る 瞬間』は ★必ず ずれる★★★
+         ⇒ ★控えを どこで 入れても ★窓は 0 に なりません★★
+         ⇒ ★★＝『いつ 控えるか』では 解けない／★何を 比べるか★を 変える★★
+       ★★考え★★ … ★倉庫に 在るのが ★自分が 送った 値★なら
+         それは ★定義上 別の 端末の 書きでは ない★★
+         （★実物★＝WebKit run `36343338113` の 覆い 2回目
+            souko=19:15:35.12 ／ hikae=19:15:34.71 ／ ★neverSynced=false★
+            ＝★倉庫に 在るのは 自分の 書き★）
+       ★★ms で 持つ★★ … 送「…34.710Z」／倉庫が 返す「…34.71+00:00」
+         ＝★★字では 当たりません（倉庫が 末尾の 0 を 落とす）★★
+         ⇒ ★ここを 外すと ★0件で 空振り★＝一番 見つけにくい 形★
+       ★★`Date.parse` が NaN の 物は 入れない★★＝★NaN は 何にでも 当たる★
+       ★★口ごとに 持つ★★ … `uid` が 変わったら 捨てる（★他の 人の 値で 通さない★）
+       ★★上限 8個★★ … ★秒で 切りません★（`updated_at` は ★お客さんの 端末の 時計★＝ずれる） */
+    var _okuttaUA = [];
+    var _okuttaUid = null;
+    var OKUTTA_UE = 8;
+    var _jibunDeToshita = 0;   /* ★自分が 送った 値だったので 弾かなかった 回数★
+                                  ＝★指示役1 の ③『★残った 窓に 入った 回数★』と 同じ 口★
+                                  ⇒ ★0 なら 未測定／1以上 なら 残って いた 窓の 大きさ★ */
+    function _msNi(v){ var t = Date.parse(String(v || '')); return isNaN(t) ? null : t; }
+    function _okuttaKuchi(uid){ if(_okuttaUid !== uid){ _okuttaUid = uid; _okuttaUA = []; } }
+    function _okuttaIreru(v){
+      var t = _msNi(v); if(t === null) return;   /* ★NaN は 入れない★ */
+      if(_okuttaUA.indexOf(t) < 0) _okuttaUA.push(t);
+      if(_okuttaUA.length > OKUTTA_UE) _okuttaUA.splice(0, _okuttaUA.length - OKUTTA_UE);
+    }
+    function _jibunGaOkuttaKa(v){ var t = _msNi(v); return t !== null && _okuttaUA.indexOf(t) >= 0; }
+    /* ★測る 口★ */
+    Store.okuttaNoKazu = function(){
+      return { toshita:_jibunDeToshita, meibo:_okuttaUA.length };
+    };
+
+    /* ★★待った ms を 1本ずつ 控える★★（2026-09-28・指示役1 の ②）
+       ★訳★ … ★これは ★客が 開いた 直後★の 道★＝★待ちが 長いと
+         『押したのに 何も 起きない』に 見えます★
+       ⇒ ★★回数だけでは 客の 速さは 分かりません＝★ms を 出す★★★
+       ★上限（8秒）に 当たった 回数＝`kire`★ … ★1回でも 在れば 別の 話★ */
+    var _machiMs = [];           /* ★待った ms（1つの 保存 につき 1件・出しの 為に 20件まで） */
+    function _machiMsIreru(ms){
+      if(_machiMs.length < 20) _machiMs.push(ms);
+    }
+    /* ★測る 口★＝★この 直しが 効いたかは これで 数える★ */
+    Store.machiNoKazu = function(){
+      return {
+        kai:_machiKai, kire:_machiKire, session:!!_machiUid, yondaKa:cloudLoaded,
+        /* ★待った ms★ … ★最小／最大／全部（20件まで）★（★待って いなければ null★） */
+        msSaisho: _machiMs.length ? Math.min.apply(null, _machiMs) : null,
+        msSaidai: _machiMs.length ? Math.max.apply(null, _machiMs) : null,
+        ms: _machiMs.slice(0)
+      };
+    };
+    /* ★★一度 間違えた 形を 残して おきます（★同じ 穴に 落ちない 為★）★★
+       ★前の 形★ … `getSession()` の 答えを ★旗に 控えて★ おいて、保存の 時に その 旗を 見た。
+       ★落ちた 訳★ … ★`getSession()` は 非同期★＝★一番 最初の 保存の 時には まだ 立って いない★
+         ⇒ ★★旗が false＝待たない＝隙が 閉まらない★★
+         ⇒ 実物＝`kyuyo/tests/cloud-sync.mjs` の ★隙①が 赤★（★見張りが 捕まえた★）
+       ★今の 形★ … ★★同じ 道の 中で `curUid()` に 訊く★★
+         ＝★控えた 旗を 信じない★（[[feedback_hajimatta_jikoku_wa_tsukatte_iru_ka_no_akashi_de_nai]] の 同じ型） */
+    /* ★`_konoMachiKara`★＝★★この 保存が★ 待ち始めた 時刻★（★呼ぶ 側は 渡しません★
+       ＝待ちの 輪が 自分で 持ち回す／★1つの 保存が 何ms 待ったか★を 出す 為） */
+    /* ★★`_konoUid`＝★一度 訊いた 入口を 持ち回す★★★（2026-09-28）
+       ★訳（★踏みかけた 穴★）★ … `curUid()` は `sb.auth.getUser()`＝★倉庫へ 問い合わせます★。
+         ★刻み 200ms × 上限 8秒＝1回の 保存で ★最大 40往復★★ に なって いました。
+       ⇒ ★★訊くのは ★1つの 保存に つき 1回★★★（＝今まで と 同じ 数）
+       ★控えた 旗は 信じない／でも ★同じ 保存の 中では 訊き直さない★★ */
+    Store.cloudSaveState = function(state, _konoMachiKara, _konoUid){
+      /* ★出る 時に ★待った ms★ を 1件 控える★（待って いなければ 何も しない） */
+      var _oeru = function(){
+        if(_konoMachiKara != null) _machiMsIreru(Date.now() - _konoMachiKara);
+        return _hozonNoTsugi(state);
+      };
+      /* ★★①読み込みが まだ 始まって いない★★＝★少し 待つ★（上に 訳を 書いた） */
+      if(!saveHold && !cloudLoaded && lastCompanyUpdatedAt === null){
+        return (_konoUid == null ? curUid() : Promise.resolve(_konoUid)).then(function(uid){
+          _machiUid = uid || null;
+          /* ★入口を 通って いない＝雲は そもそも 対象外＝待たない★ */
+          if(!uid) return _oeru();
+          /* ★待って いる 間に 誰かが 読み込みを 始めた／読めた＝もう 待つ 必要が 無い★ */
+          if(saveHold || cloudLoaded || lastCompanyUpdatedAt !== null) return _oeru();
+          if(_machiKara === null) _machiKara = Date.now();
+          if((Date.now() - _machiKara) < YOMI_MACHI_MS){
+            _machiKai++;
+            var _kono = (_konoMachiKara == null) ? Date.now() : _konoMachiKara;
+            return new Promise(function(ok){ setTimeout(ok, YOMI_KIZAMI_MS); }).then(function(){
+              /* ★待った 後は 中身を 取り直す★＝★古い 一覧で 上書きしない★（2026-09-03 の P0 と 同じ 決め）
+                 ★転んだら 黙らない★＝★取り直しが 落ちても 待ちの 輪が 静かに 死ぬのを 防ぐ★ */
+              var fresh = null;
+              try{
+                fresh = (typeof Store._snapFn === 'function') ? Store._snapFn() : null;
+              }catch(_eS){
+                console.error('★待った 後に 新しい 中身を 取れません＝手元の 物で 出します★', _eS);
+                fresh = null;
+              }
+              return Store.cloudSaveState(fresh || state, _kono, uid).catch(function(_eC){
+                /* ★言ってから 投げ直す★＝呼んだ 側（app.js）の 受け皿に ちゃんと 渡す */
+                console.error('★読み込みを 待った 後の 保存が 落ちました★', _eC);
+                throw _eC;
+              });
+            });
+          }
+          /* ★待ち切れた★＝★今まで どおりの 道に 出す★（★何も 失いません★） */
+          _machiKire++;
+          return _oeru();
+        }, function(_eU){
+          /* ★入口を 訊けない＝★待たずに 今までどおり★（黙りません） */
+          console.error('★入口の 今を 訊けません＝読み込み前の 隙は 閉めません★', _eU);
+          return _oeru();
+        });
+      }
+      return _oeru();
+    };
+    function _hozonNoTsugi(state){
       // ★②初回の読み込みが 走っている間は 保存しない★=済んでから 1回だけ 出す(中身は取り直す)
       if(saveHold){
         if(!heldOnce){
@@ -170,7 +360,26 @@
         return heldOnce;
       }
       return realSave(state);
-    };
+    }
+    /* ★★★ここに あった『保存を 直列に する包み』は
+       ★効かないと 実測で 分かった ので 戻しました★★★（2026-09-27）
+       ★入れた 訳★ … 覆い（「別の端末で更新されています」）の 因を
+         ★保存が 重なる 事★と 見立てたから。
+       ★戻した 訳（★数★）★
+         㑕★包みを 入れても ★待たせた 0回／捨てた 0回★
+            （CI attempt=6・★片づけの 前に 読んだ 数★）
+         㑖★★包みを わざと 外した 木でも ★覆い 0回★★★
+            （枝 `waza-serial-off`・run ★36304848683★・23 passed, 0 failed）
+         ⇒ ★★外しても 同じ＝★包みは 覆いと 無関係★★★
+       ★学んだ 事★ … ★★『働いて いない』と『何も 変えて いない』は 別★★
+         ★私は「待たせた 0回 だから 外しても 同じ」と 言って
+           ★指示役1 の『外して 測れ』を 1度 断りました★
+         ⇒ ★★それが 間違い★★（`.then` が 1つ 増える＝★時間の 並びは 変る★）
+         ⇒ ★★外して 同じ 木で 走らせる しか 分けられない★★
+       ★測る 口は 残して あります★
+         `Store.ooiNoKazu` の 口（★覆いの 2つの 値と 同じ 瞬間か★）
+         `Store.hikaeNoKazu` の 口（★`|| now` に 落ちた 回数★）
+       ★㉕-2（覆い）の 因は ★まだ 未説明★です★ */
     function realSave(state){
       return curUid().then(function(uid){ if(!uid) return { ok:false, reason:'no-user' }; var now=new Date().toISOString();
         // ★employees以外の全スナップショット項目を保存(確定印/年末調整/賞与/カスタム給テンプレ/onboard等も載せる=端末替えで消えない)
@@ -184,7 +393,78 @@
           // ★上書きせずconflictにする条件: クラウドに既存データがあり、それが「自分が最後に把握した値」と違う。
           //  別端末が後から書いた場合だけでなく、この端末がまだクラウドを読めていない(lastUA=null)のに本番データがある場合も含む
           //  =古い/新規端末が本番のsettings(確定・年調・会社設定)を静かに巻き戻すのを防ぐ(P0)。空クラウド(cloudUA=null)は新規保存OK。
-          if(cloudUA && cloudUA!==lastCompanyUpdatedAt){
+          /* ★★★『自分が 送った 値なら 弾かない』★★★（2026-09-28・指示役1 の ④）
+             ★★門＝`lastCompanyUpdatedAt != null` を ★先に★ 見る★★（★指示役1 が 止めた P0★）
+               ★門 無しだと こう なる★
+                 ㋐読み込む 前の 端末（控え null・中身は ほぼ 空）が 保存 → ★T1 を 送る★
+                 ㋑同じ 端末が もう 一度 保存 → `cloudUA=T1`／控えは ★まだ null★
+                    ⇒ ★T1 は 自分の 名簿に 在る★ ⇒ ★★通って しまう★★
+                 ⇒ ★★空の 端末が 本番の 確定印・年末調整・会社設定を ★黙って 巻き戻す★★★
+                 ＝★上の 覚書（P0）が 守って いた ものそのもの★
+               ⇒ ★★『まだ 一度も 読んで いない 端末』は ★今まで どおり 必ず 弾く★★★
+             ★ここで 通す 物★ … ★読み込み済み かつ 倉庫に 在るのが 自分が 送った 値★ だけ */
+          if(cloudUA && cloudUA!==lastCompanyUpdatedAt && lastCompanyUpdatedAt != null && _jibunGaOkuttaKa(cloudUA)){
+            _jibunDeToshita++;
+            /* ★控えも 追いつかせる★＝★次の 保存で また ここに 来ない 為★ */
+            lastCompanyUpdatedAt = cloudUA;
+          }
+          else if(cloudUA && cloudUA!==lastCompanyUpdatedAt){
+            /* ★★★測る 為だけの 控え（★直しでは ありません★）★★★（2026-09-27）
+               ★なぜ 8日 追っても 因が 立たないか★
+                 ★外から 見えるのは ★要求と 倉庫★だけ★
+                 ★この 行の 二つの 値（`cloudUA` と `lastCompanyUpdatedAt`）は
+                   ★画面の 中の 閑し★＝★外から 読めません★
+               ⇒ ★★ここで 控えないと 因は 決まりません★★
+               ★一番 疑って いる 形★ … ★字の 形だけの 偽 conflict★
+                 `:212` `lastCompanyUpdatedAt=(res[0]…updated_at) ★|| now★;`
+                 ⇒ ★DB が 値を 返さなかった 回だけ ★JS の 《…Z》形★が 控えに 入る★
+                 ⇒ 次の 確認は DB の 《…+00:00》を 読む
+                 ⇒ ★★字が 違う★★＝★★同じ 瞬間なのに conflict★★
+                 ★`:211` の 覚書が まさに その 話★
+                   「JS生成の now(…Z) は DB返却(…+00:00)と 書式が 違い、
+                     ★文字列比較で 毎回 不一致★＝誤conflictが 多発する（P0根治）」
+               ★測る 物★ … ①倉庫の 値 ②控えの 値 ③★同じ 瞬間か★
+                 ⇒ ★★同じ 瞬間なら ★字の 形だけの 偽 conflict★★
+                 ⇒ ★違う 瞬間なら ★本当に 別の 書き★★
+               ★★倉庫にも 画面にも 何も 変えません★★（★配列に 積むだけ★）
+               ★CI でも 走ります★（★倉庫の 鍵が 要りません★）
+                 ＝★★覆いが 実際に 出る 所で 測れます★★
+                 （★手元では 7回 回して 覆い 0回＝★手元では 測れない★） */
+            try{
+              var _pa = function(v){ var t = Date.parse(String(v)); return isNaN(t) ? null : t; };
+              var _a = _pa(cloudUA), _b = _pa(lastCompanyUpdatedAt);
+              Store._conflictLog = Store._conflictLog || [];
+              Store._conflictLog.push({
+                t: Date.now(),
+                souko: String(cloudUA),
+                hikae: (lastCompanyUpdatedAt === null ? null : String(lastCompanyUpdatedAt)),
+                onajiShunkan: (_a !== null && _b !== null && _a === _b),
+                ji: 'souko=' + String(cloudUA) + ' hikae=' + String(lastCompanyUpdatedAt),
+                neverSynced: (lastCompanyUpdatedAt == null)
+              });
+              /* ★★★その場で 出しに 出す★★★（2026-09-27）
+                 ★なぜ 積むだけ では 足りないか（実測で 割れた）★
+                   CI `36308216387` の 時刻を 並べると
+                     09:10:53〜54 … ★覆いが 出て います ×3★（★片づけの 中★）
+                     09:11:00 … 片づけ ⑥★開き直して★ 数えた
+                     09:11:02 … ★覆いの 中身 … 覆い 0回★
+                   ⇒ ★★開き直すと 画面の 中の 控えは 0に 戻る★★
+                   ⇒ ★★控えの 0 は「出て いない」でなく「★消された★」★★
+                 ⇒ ★★その場で 出しに 出せば ★開き直しても 残る★★
+                 ★客の 画面を 汚しません★
+                   ★試験が 立てた 旗が 在る 時だけ 出します★
+                   `window.__OOI_KIROKU__`（★試験は `addInitScript` で 立てる
+                     ＝★開き直しても 旗は 残る★）
+                 ★値も 判じも 1文字も 変えて いません★ */
+              try{
+                if(global.__OOI_KIROKU__){
+                  console.log('★覆いの その場★ souko=' + String(cloudUA)
+                    + ' hikae=' + String(lastCompanyUpdatedAt)
+                    + ' onajiShunkan=' + String(_a !== null && _b !== null && _a === _b)
+                    + ' neverSynced=' + String(lastCompanyUpdatedAt == null));
+                }
+              }catch(_e2){}
+            }catch(_e){}
             // neverSynced=この端末がまだクラウドを読めていない(別端末の更新でなく"未読込")→app側で文言を分ける(誤解防止)
             return { ok:false, reason:'conflict', cloudUpdatedAt:cloudUA, neverSynced:(lastCompanyUpdatedAt==null) };
           }
@@ -195,9 +475,54 @@
           return cloudSynced ? doSave() : { ok:false, reason:'sync-check-failed' };
         });
         function doSave(){
-        var ops=[
+        /* ★★★控えを ★倉庫が 書けた 瞬間★ に 新しく する★★★（2026-09-28・★実測から★）
+           ★★何が 起きて いたか（WebKit run `36343338113` の 字）★★
+             `★覆いの その場（2回目）★ souko=…19:15:35.12 ★hikae=…19:15:34.71★
+                onajiShunkan=false ★neverSynced=false★`
+             ⇒ ★控えが null では ない＝★読み込みは 済んで いる★★
+             ⇒ ★★控えが ★0.41秒 古い★ だけ★★
+           ★★因（★下の `Promise.all` の 位置★）★★
+             束は ★3本★ … ①`pay_companies` の 書き ②`pay_employees` の 書き ③差分削除（★全件 読み★）
+             ★控えを 新しく するのは ★3本 全部が 返って から★★
+             ⇒ ★★①が 倉庫に 着いた 後、②③が 返るまでの 間★★
+                ★倉庫には 新しい 値が 在る／手元の 控えは まだ 旧い★
+             ⇒ ★★その 窓で 別の 保存が `select updated_at` を すると ★自分の 書きで 自分が 弾かれる★★★
+           ★★指示役1 が 数えた 分母（同じ 走り）★★
+             ・保存(POST) … ★788本★／★重なった 組 10455組★／★同時に 飛んで いた 最大 45本★
+             ・★『自分で 自分を 弾ける 組』… 1組★
+               出420（書き・送った「…536012」）→ 出455（確認の 読み・★同じ 値を 返した★）
+               ＋★同じ 束の ②が まだ 返って いない（棚 `pay_employees`）★
+           ★★直し＝★①が 返った その場で 控えを 新しく する★★★
+             ＝★窓を 閉じる★／★直列に しません（遅く しません）★
+             ★お金の 判じ（conflict に するか）は ★1文字も 変えて いません★★
+           ★★`!bad` を 待たない 訳★★
+             控えの 意味は「★倉庫の `pay_companies` の 今の 値を いくつだと 知って いるか★」。
+             ①が 書けたなら ★その 値は もう 知って います★（②③の 成否とは 別の 事）。
+             ⇒ ★②が 落ちた 時に 控えだけ 進む★が、★倉庫の 会社の 行は 自分の 字★＝
+               ★次の 保存で 上書きしても 消える 物が 無い★／★`ok:false` は 今まで どおり 返します★
+             ⇒ ★★前は「全部 成功」と「値を 知って いる」を ★1つに して いた★★ */
+        /* ★★送る ★前★ に 名簿へ 入れる★★（2026-09-28・指示役1 の ④）
+           ★返りを 待って から 入れると 窓が 閉まりません★
+           ＝★窓の 正体は「送った／倉庫に 着いた／返りが 来た」が ★3つ 別の 時刻★ だから★
+           ★口ごとに 持つ★＝`uid` が 変わったら 名簿を 捨てる */
+        _okuttaKuchi(uid);
+        _okuttaIreru(now);
+        var kaishaOp = sb.from('pay_companies').upsert({ account_id:uid, data:settings, updated_at:now })
           // ★.select('updated_at').single()=DBが実際に保存した updated_at を受け取り、競合基準に使う(下記)。
-          sb.from('pay_companies').upsert({ account_id:uid, data:settings, updated_at:now }).select('updated_at').single(),
+          .select('updated_at').single()
+          .then(function(r){
+            if(r && !r.error){
+              var _ua = (r.data && r.data.updated_at);
+              if(_ua){ _uaAtta++; } else { _uaNakatta++; }
+              /* ★倉庫が 返した 値も 名簿へ★（★丸めの 保険★／★NaN は 入りません★） */
+              if(_ua){ _okuttaIreru(_ua); }
+              lastCompanyUpdatedAt = _ua || now;
+              _hikaeHayaku++;   /* ★★束を 待たずに 控えた 回数★★（★この 直しが 効いた 回数★） */
+            }
+            return r;
+          });
+        var ops=[
+          kaishaOp,
           emps.length? sb.from('pay_employees').upsert(emps) : Promise.resolve({ error:null })
         ];
         // ★差分削除は「★読み込めた(cloudLoaded)★かつ手元に従業員が居る」時だけ=空/古い端末が本番を消さない
@@ -209,7 +534,9 @@
           var bad=res.filter(function(x){ return x && x.error; })[0];
           // ★競合基準は必ず「DBが返した updated_at」にする。JS生成の now(…Z) はDB返却(…+00:00)と書式が違い、
           //  文字列比較で毎回不一致=読込直後や2回目保存(スクロール等の自動保存)で誤conflictが多発する(P0根治)。
-          if(!bad){ cloudSynced=true; lastCompanyUpdatedAt=(res[0] && res[0].data && res[0].data.updated_at) || now; }
+          /* ★★控えは もう ★上の `kaishaOp` の 中★ で 新しく して います★★（2026-09-28）
+             ＝★ここで 待つと『倉庫は 新しい／控えは 旧い』窓が 開く★（上に 訳と 実測） */
+          if(!bad){ cloudSynced=true; }
           return { ok:!bad, reason: bad?((bad.error&&bad.error.message)||'error'):null };
         }).catch(function(e){ return { ok:false, reason:(e&&e.message)||'exception' }; });
         }
@@ -224,6 +551,26 @@
           var co=res[0].data && res[0].data.data; var emps=(res[1].data||[]).map(function(r){ return r.data; });
           cloudSynced=true; cloudLoaded=true; // ★読めた★=差分削除を許可(空でも=新規アカウント)=同期済み(空でも=新規アカウントとして差分削除を許可)
           lastCompanyUpdatedAt=(res[0].data && res[0].data.updated_at)||null; // ★競合検知の基準=読込時のクラウドupdated_at
+          /* ★★★測る 為だけの 1行★★★（2026-09-27・指示役1 の ②）
+             ★なぜ 要るか★ … ★控えが null に なる 道は 2本★
+               㐖★まだ 一度も 読んで いない★（初めの null の まま）
+               㐗★★読んだ が ★会社の 行が 無く null を 入れた★★
+                  （ は 行が 無ければ  が null）
+             ⇒ ★★どちらかで 直す 所が 変わる★★
+             ★実物（09-27）★ … 覆いの その場 … ★hikae=null / neverSynced=true★
+               ⇒ ★㐖か 㐗か ★まだ 割れて いません★★
+             ★客の 画面は 汚しません★（★試験が 立てた 旗が 在る 時だけ★）
+             ★値も 判じも 1文字も 変えて いません★ */
+          try{
+            if(global.__OOI_KIROKU__){
+              _yomiKai++;
+              console.log('★読み込みの その場★ kaime=' + _yomiKai
+                + ' kaishaNoGyo=' + String(!!(res[0] && res[0].data))
+                + ' updated_at=' + String(res[0] && res[0].data && res[0].data.updated_at)
+                + ' hikaeNiIreta=' + String(lastCompanyUpdatedAt)
+                + ' hito=' + String(emps.length));
+            }
+          }catch(_e3){}
           if(!co && !emps.length) return null; var s=co||{}; s.employees=emps; return s;
         });
       });
