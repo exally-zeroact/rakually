@@ -173,6 +173,9 @@
        ★★学んだ 事：消す 時は『宣言・使う 所・読む 口』を 全部 数える★★ */
 
     /* ★`|| now` に 落ちた 回数★（実測 09-27：保存 33回／返した 33回／★落ちた 0回★） */
+    /* ★人を 消した 口の 控え★（★宣言は 使う 所より 前に 置く＝今日 1回 `ReferenceError` を 踏んだ★） */
+    var _sabunHashitta = 0, _sabunYomazu = 0, _sabunKara = 0;
+    var _kesuTanomi = [], _kesuKieta = [];
     var _uaAtta = 0, _uaNakatta = 0;
     /* ★★束を 待たずに 控えた 回数★★（2026-09-28＝★『倉庫は 新しい／控えは 旧い』窓を 閉じた 回数★）
        ★0 なら この 直しは ★1回も 効いて いません★＝★未測定★★ */
@@ -258,6 +261,27 @@
     }
     function _jibunGaOkuttaKa(v){ var t = _msNi(v); return t !== null && _okuttaUA.indexOf(t) >= 0; }
     /* ★測る 口★ */
+    /* ★★人を 消した 口を 数える★★（2026-09-28・指示役1 の ④）
+       ★`tanomi`＝頼んだ 件数／`kieta`＝★本当に 消えた 件数★（★-1＝返りが 無い＝未測定★）
+       ★`kuizure`＝頼んだ ≠ 消えた の 回数／★`ookusugi`＝消えた ＞ 頼んだ（★事故★）★
+       ⇒ ★★『黙って 0件 消して いる』を ★数で★ 捕まえる 口★★ */
+    /* ★★差分削除を 走らせた／飛ばした 回★★（2026-09-28）
+       `hashitta` … 走った ／ ★`yomazu`＝★読み込めて いない（`cloudLoaded` が 偽）★★ ／ `kara`＝手元に 人が 0人
+       ⇒ ★★`yomazu ≥ 1` は ★客が 消した のに 倉庫へ 消しが 行って いない★ 回が 在る 事★★ */
+    Store.sabunNoKazu = function(){
+      return { hashitta:_sabunHashitta, yomazu:_sabunYomazu, kara:_sabunKara,
+               zen:(_sabunHashitta + _sabunYomazu + _sabunKara) };
+    };
+    Store.kesuNoKazu = function(){
+      var t = _kesuTanomi, k = _kesuKieta, n = Math.min(t.length, k.length);
+      var kui = 0, oo = 0, sukunai = 0, mi = 0;
+      for(var i=0;i<n;i++){
+        if(k[i] < 0){ mi++; continue; }
+        if(k[i] !== t[i]){ kui++; if(k[i] > t[i]) oo++; else sukunai++; }
+      }
+      return { kai:n, tanomi:t.slice(0), kieta:k.slice(0),
+               kuizure:kui, ookusugi:oo, sukunasugi:sukunai, mitei:mi };
+    };
     Store.okuttaNoKazu = function(){
       return { toshita:_jibunDeToshita, meibo:_okuttaUA.length };
     };
@@ -299,7 +323,7 @@
       /* ★出る 時に ★待った ms★ を 1件 控える★（待って いなければ 何も しない） */
       var _oeru = function(){
         if(_konoMachiKara != null) _machiMsIreru(Date.now() - _konoMachiKara);
-        return _hozonNoTsugi(state);
+        return _retsuNiNoseru(state);
       };
       /* ★★①読み込みが まだ 始まって いない★★＝★少し 待つ★（上に 訳を 書いた） */
       if(!saveHold && !cloudLoaded && lastCompanyUpdatedAt === null){
@@ -330,7 +354,18 @@
               });
             });
           }
-          /* ★待ち切れた★＝★今まで どおりの 道に 出す★（★何も 失いません★） */
+          /* ★★待ち切れた★＝今まで どおりの 道に 出す★★
+             ★★前の 字（★次の 人を 騙します★）★★ … 「★何も 失いません★」
+               ⇒ ★それは ★データの 話★だけ★。指示役1 が 2026-09-28 に 字を 読んで 止めました。
+             ★★本当に 起きる 事★★
+               ⑴★控えが `null` の まま 保存に 進みます★
+               ⑵★その 口に すでに データが 在れば ★必ず conflict★★
+               ⑶⇒ ★★客は その 回 保存できません（覆いが 出ます）★★
+                  ＝★データは 失いませんが ★保存は 通りません★★
+             ★2つ 揃った 時だけ★ … ⑴初回の 読み込みが 8秒で 終わらない（★遅い 回線／人数が 多い★）
+               ⑵その 口に すでに データが 在る
+             ★何回 起きたかは `Store.machiNoKazu().kire` で 数えます★
+               （★0回なら この 道は 1度も 通って いません＝未測定★） */
           _machiKire++;
           return _oeru();
         }, function(_eU){
@@ -341,6 +376,74 @@
       }
       return _oeru();
     };
+    /* ★★★保存を ★1本ずつ★ 並べる（★客の 穴の 直し★）★★★（2026-09-28・★本番の 赤から★）
+       ★★何が 起きて いたか（実測）★★
+         WebKit `36441683363`（`soshitsu-ui`）… ⑥ ★残り 1人★
+           ⑤-3 差分削除 … ★走った 32回／読み込めて いない 0回★ ⇒ ㋒（走って いない）は 違う
+           ⑥-2 … DELETE 1本／★頼んだ 1件・消えた 1件（合う）★ ⇒ ㋑（消せて いない）も 違う
+                 ★★消せと 言った id（`e592de8zk`）が ★後から 着いた 書きに 入って いた★★
+       ★★客に 出る 形★★
+         ★人を 消すと ★消す 前の 名簿を 積んだ 保存が まだ 飛んで います★★
+         ⇒ ★それが 消した 後に 着くと ★消した 人が 復活します★★
+         ⇒ ★画面は「『◯◯』を 削除しました」と 出た まま★＝★客は 気づけません★
+       ★★なぜ『消す 前に 待つ』では ないか★★
+         ★消しは ★保存の 中★に 在ります（`splice` → 次の 保存の 差分削除）★
+         ＝★『消す』という 独立の 操作が 無い＝★待つ 主体が 居ません★★
+       ★★直しの 形★★
+         ⑴★走って いる 保存が 終わるまで 次を 出さない★（★並ぶ＝追い越しが 消える★）
+         ⑵★★送る 直前に 中身を 取り直す（`Store._snapFn()`）★★
+            ＝★待たせた 保存を ★古い 名簿の まま★ 出すと ★同じ 穴を 自分で 作ります★
+            ＝★`:345` の 待ちで 既に 使って いる 形と ★同じ★★（指示役1 の ③）
+       ★★失う 物は 0★★ … `kyuyo.pay_employees` に ★版を 持つ 欄は 1つも ありません★
+         （`id`/`account_id`/`sort`/`data`/`updated_at`）＝★元々 毎回 上書き★
+       ★空振り止め★ … `kyuyo/tests/cloud-sync.mjs` の ★㋔★（★直す前は 赤★） */
+    var _retsu = Promise.resolve();   /* ★今 走って いる 保存★ */
+    var _machiP = null;               /* ★待って いる 1本（★ここへ 畳む★）★ */
+    var _retsuTatanda = 0, _retsuHashitta = 0, _retsuMatta = 0, _retsuTorenakatta = 0;
+    var _ugoiteiru = false;           /* ★今 1本 走って いるか★（★『待った』を 数える 為★） */
+    /* ★並びの 数を 外から 読む 口★
+       `hashitta`＝実際に 送った 回数／★`tatanda`＝待って いる 1本に 畳んだ 回数★
+       ⇒ ★★`tatanda` が 0 なら この 直しは ★1回も 効いて いません（未測定）★★ */
+    Store.retsuNoKazu = function(){
+      /* ★`matta`＝前の 保存が まだ 走って いた ので ★待たせた★ 回数
+         ★`tatanda`＝待って いる 1本に 畳んだ 回数（★2本目以降★）
+         ⇒ ★★どちらも 0 なら ★重なりが 1回も 起きて いない＝この 直しは 未測定★★★ */
+      return { hashitta:_retsuHashitta, tatanda:_retsuTatanda, matta:_retsuMatta,
+               torenakatta:_retsuTorenakatta };
+    };
+    function _retsuNiNoseru(state){
+      /* ★★待って いる 1本が 在れば ★そこへ 畳む★★★（2026-09-28）
+         ★なぜ 畳んで よいか★ … ★走る 直前に 中身を 取り直す★ので
+           ★待って いた 分を 別々に 走らせても ★同じ 物を 何回も 送るだけ★★
+         ★★＋畳まないと 壊れる 決まりが 在ります★★
+           `P0-race②`「★保留した 保存は 読み込みの 後に ★1回だけ★ 出る★」
+           ＝★畳まずに 並べたら ★3回 出ました（実測）★★＝★この 決まりを 破ります★
+         ⇒ ★★＝『並べる』と『畳む』は ★2つで 1つ★★ */
+      if(_ugoiteiru || _machiP){ _retsuMatta++; }
+      if(_machiP){ _retsuTatanda++; return _machiP; }
+      var tsugi = _retsu.then(function(){ return null; }, function(){ return null; }).then(function(){
+        _machiP = null;              /* ★★走り出す 前に 外す★★＝走って いる 間の 頼みは ★次の 1本★へ */
+        _ugoiteiru = true;
+        _retsuHashitta++;
+        /* ★★送る 直前に 中身を 取り直す★★＝★古い 名簿で 上書きしない★
+           ★受け皿を 付けます★ … 取り直せなかった 時に ★黙って 古い 名簿で 出す★と
+             ★この 直しが ★静かに 無効★に なります★
+           ⇒ ★★言ってから 受け取った 名簿で 出す（★黙らない★）★★ */
+        var fresh = null;
+        try {
+          fresh = (typeof Store._snapFn === 'function') ? Store._snapFn() : null;
+        } catch(_eS) {
+          _retsuTorenakatta++;
+          console.error('★送る 直前に 中身を 取り直せませんでした＝この 回は 受け取った 名簿で 出します★', _eS);
+        }
+        return _hozonNoTsugi(fresh || state);
+      });
+      _machiP = tsugi;
+      _retsu = tsugi.then(function(){ _ugoiteiru = false; return null; },
+                          function(){ _ugoiteiru = false; return null; });
+      return tsugi;
+    }
+
     function _hozonNoTsugi(state){
       // ★②初回の読み込みが 走っている間は 保存しない★=済んでから 1回だけ 出す(中身は取り直す)
       if(saveHold){
@@ -527,8 +630,41 @@
         ];
         // ★差分削除は「★読み込めた(cloudLoaded)★かつ手元に従業員が居る」時だけ=空/古い端末が本番を消さない
         //  (2026-09-03 変更: cloudSynced=書けた→cloudLoaded=読めた。理由は上の宣言部)
+        /* ★★差分削除を 飛ばした 回を ★訳つきで★ 数える★★（2026-09-28・★実測から★）
+           ★何が 起きたか★ … WebKit `36438495165` の 赤（`shutoku-ui`）
+             「⑥開き直して 数えた … ★残り 1人★」
+             「⑥-2 … ★DELETE ★0本★（消せと 言った id 0件）★／書き 5本／組 0組」
+             ⇒ ★★＝★差分削除が 1回も 走って いません★★（㋐書き戻しでも ㋑消せて いないでも ない）
+           ★どちらの 門で 止まったか★ … ★書きが 5本 出て いる★
+             ＝`emps.length ? upsert : …` を 通った ⇒ ★`emps.length > 0` は 真★
+             ⇒ ★★＝偽なのは `cloudLoaded`★★（★この 数で 押さえます★）
+           ★この 門は 消しません★＝★空／古い 端末が 本番を 消さない ための P0 の 守り★
+             ⇒ ★但し ★黙って 飛ばす★のを やめます（数に 出す）★
+           ★お金の 判じは 1文字も 変えて いません★＝★数えるだけ★ */
+        if(!(cloudLoaded && emps.length>0)){
+          if(!cloudLoaded){ _sabunYomazu++; } else { _sabunKara++; }
+        } else { _sabunHashitta++; }
         if(cloudLoaded && emps.length>0){
-          ops.push(fetchAllQ(function(a,b){ return sb.from('pay_employees').select('id',{count:'exact'}).eq('account_id',uid).range(a,b); }).then(function(r){ var ex=(r.data||[]).map(function(x){return x.id;}); var rm=ex.filter(function(id){ return ids.indexOf(id)<0; }); return rm.length? sb.from('pay_employees').delete().in('id',rm) : { error:null }; }));
+          ops.push(fetchAllQ(function(a,b){ return sb.from('pay_employees').select('id',{count:'exact'}).eq('account_id',uid).range(a,b); }).then(function(r){ var ex=(r.data||[]).map(function(x){return x.id;}); var rm=ex.filter(function(id){ return ids.indexOf(id)<0; }); if(!rm.length){ _kesuTanomi.push(0); _kesuKieta.push(0); return { error:null }; }
+            /* ★★★消した 行を ★返させる★（`.select('id')`）★★★（2026-09-28・指示役1 の ④）
+               ★前★ … `.delete().in('id',rm)` だけ ⇒ 返りは ★`204`★
+                 ⇒ ★★`204` は「命令が 通った」だけ＝★消えた 行数を 教えません★★★
+                 ⇒ ★★＝★0行 消えても 黙って 成功★★（RLS で 弾かれた／id が 違う／他の 席が 先に 消した）
+                 ⇒ ★★＝客の 側でも『何人 消えたか』が 分かりません★★
+               ★今★ … ★頼んだ 件数（`rm.length`）★ と ★消えた 件数（返りの 行数）★ を ★両方 控えます★
+               ★★意味は 向きで 逆です（指示役1 の ②）★★
+                 ・★頼んだ ＞ 消えた★ ⇒ ★消せて いない★（★『消したのに 戻る』の 片方の 説★）
+                 ・★★頼んだ ＜ 消えた★ ⇒ ★頼んだ より 多く 消えた＝★事故★★★
+                   （`in()` の 組み立て／`eq('account_id')` の 抜け）
+                   ⇒ ★★＝★お金の 紙が 消える 側＝一番 危ない★★
+               ★★判じは 1文字も 変えて いません★★＝★消す 相手（`rm`）も 条件も 同じ★
+               ★出しが `204`→`200＋本文` に なります★＝★前の 回の 数と 比べる 時は そう 書く★ */
+            _kesuTanomi.push(rm.length);
+            return sb.from('pay_employees').delete().in('id',rm).select('id').then(function(d){
+              var kieta = (d && d.data) ? d.data.length : -1;   /* ★-1＝返りが 無い＝未測定★ */
+              _kesuKieta.push(kieta);
+              return d;
+            }); }));
         }
         return Promise.all(ops).then(function(res){
           var bad=res.filter(function(x){ return x && x.error; })[0];

@@ -37,6 +37,11 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 const SELF = process.argv.includes('--self-test');
 
+/* ★★★『今 足した 人』の 札を 選ぶ 判じは ★1か所★（`tests/_hairu.mjs`）★★★（2026-09-28）
+   ★一度 ここに 写しましたが ★2か所に なりました★＝★同じ 状態を 別々に 判じる★ 形
+   ⇒ ★共通の 紙へ 移しました★（★同じ 穴を 持つ 5本 とも そこを 使う★）
+   ★空振り止め★ … `node tests/hairu-erabo.test.mjs`（★14通り／同じ 材料で 新旧を 並べる★）
+   ★`tests/_hairu.mjs` は ★読んでも 走りません★★（借りても 試験は 起きない） */
 /* ★物差しそのもの★（ブラウザを 使わずに 確かめられる 形） */
 export function csvOk(text) {
   const gyo = String(text || '').split('\r\n').filter((x) => x.length);
@@ -50,23 +55,26 @@ export function csvOk(text) {
 if (SELF) {
   console.log('\n[soshitsu-ui] ★自己確認★（★物差しそのもの★・ブラウザを 使わない）');
   let ng = 0;
-  const say = (nm, good) => { if (!good) ng++; console.log('  ' + (good ? '✓' : '✗') + ' ' + nm + (good ? '' : '  ★思っていたのと 違う★')); };
+  let zen = 0;   /* ★通りの 数を ★数える★（決め打ちに しない＝足したのに 出しが 古い のを 止める） */
+  const say = (nm, good) => { zen++; if (!good) ng++; console.log('  ' + (good ? '✓' : '✗') + ' ' + nm + (good ? '' : '  ★思っていたのと 違う★')); };
   const r27 = '2201700' + ','.repeat(26);
   say('データ行を 数える（27列）', JSON.stringify(csvOk('a,b\r\n' + r27 + '\r\n')) === '{"gyo":2,"data":1,"zure":0,"retsu":27}');
   say('★1つ ずれた 行（26列）を 見つける★', csvOk(r27.slice(0, -1) + '\r\n').zure === 1);
   say('★2人目だけ ずれていても 見つける★', csvOk(r27 + '\r\n' + r27.slice(0, -1) + '\r\n').zure === 1);
   say('データ行が 無ければ 0', csvOk('a,b\r\n').data === 0);
   say('空なら ぜんぶ 0', csvOk('').gyo === 0);
+  /* ★『今 足した 人』の 選び方の 空振り止めは ★`tests/hairu-erabo.test.mjs` に 移しました★★
+     ＝★判じが 1か所なら 空振り止めも 1か所★（★ここで 二重に 書かない★） */
   if (ng) { console.log('\n★自己確認 ' + ng + '件 おかしい★'); process.exit(1); }
-  console.log('  ★5通り ぜんぶ 思った通り★');
+  console.log('  ★' + zen + '通り ぜんぶ 思った通り★');
   process.exit(0);
 }
 
 /* ── ここから 実ブラウザ ───────────────────────────────── */
-let borrow, pwLaunch, hairu, osu;
+let borrow, pwLaunch, hairu, osu, eraboFuda, fudaWoAtsumeru;
 try {
   ({ borrow, launch: pwLaunch } = await import('../../scripts/_borrow-playwright.mjs'));
-  ({ hairu, osu } = await import('../../tests/_hairu.mjs'));
+  ({ hairu, osu, eraboFuda, fudaWoAtsumeru } = await import('../../tests/_hairu.mjs'));
 } catch (e) { console.log('🟡 ★未測定★ 道具が 読めない … ' + (e && e.message)); process.exit(2); }
 const wk = await borrow('soshitsu-ui', 'webkit');
 if (!wk) { console.log('🟡 ★未測定★ playwright を 借りられない（0件＝合格 とは 書かない）'); process.exit(2); }
@@ -181,16 +189,54 @@ await osu(pg, '#set-seg .seg-b[data-set="emp"]'); await machi(700);
     if (!fueta) console.log('       🟡 ★札が 増えない★（20秒 待った）＝この先は 当てに ならない');
     await machi(400);
   }
-/* ★この 口座には 前の 回の 人が 残る★（実測 2026-09-05）＝★今 足した 人＝一番 下の 札★だけを 触る。
-   1人目を 触ると ★前の 回の 人を 書き換える★事に なる（実際 1回 やって 空振りした）。 */
-const IDX = await pg.evaluate(() => {
-  const c = Array.from(document.querySelectorAll('#emp-list .mco'));
-  return c.length ? c[c.length - 1].getAttribute('data-i') : null;
-});
-if (IDX === null) { console.log('  🟡 ★未測定★ 従業員の 札が 1枚も 無い'); await b.close(); srv.close(); process.exit(2); }
+/* ★この 口座には 前の 回の 人が 残る★（実測 2026-09-05）＝★今 足した 人★だけを 触る。
+   1人目を 触ると ★前の 回の 人を 書き換える★事に なる（実際 1回 やって 空振りした）。
+
+   ★★★2026-09-28 ★『一番 下の 札』は 外れます★（★実測で 赤に なった★）★★★
+     ★実物★ … 定時の WebKit `36362080874` が ★この 段で 赤★
+        字 … `札 ★27★` ／ ✗「何も 入れていない その人を『出せる』と 言わない」
+             ✗「見込み月額の 欄が 出ない」 ✗「ボタン『（無い）』」
+     ★因（`kyuyo/js/app.js` を 読んだ）★
+        `visibleEmpIdx()` / `renderEmpMaster()` は
+        ★①`dept`（部署）で 束ねて 出す★／★②`empMatchesFilter` で 絞る★
+        ⇒ ★★`data-i` は ★`state.employees` の 番号★＝★DOM の 順とは 別★★★
+        ⇒ ★★＝`c[c.length - 1]` は ★一番 下の 束の 最後の 人★＝★足した 人 とは 限らない★★★
+     ★★更に 悪い★★ … この すぐ 下で ★その 札に 名前を 打ち込みます★
+        ⇒ ★★選びが 外れると ★他人の 人の 名前を 上書きします★★★
+        ⇒ ★★『倉庫を 汚した 恐れ』は ★未測定★★（★名前が 同じに なれば 数えられない★）
+
+   ★★直し＝★2つで 挟む★★★（指示役1 の 案）
+     ⑴★`data-i` の ★最大値★ を 取る★
+        ＝`#b-add-emp` は `state.employees.★push★(e)`（`app.js:5504`）
+        ⇒ ★足した 人は ★いつも 最大の 番号★★（★束ね直しでも 絞り込みでも 変わらない★）
+        ⇒ ★★『一番 下の 札』では なく『最大の 番号』★★
+     ⑵★その 札の ★名前★ が `従業員 N` の 形か 確かめる★
+        ＝`defEmp('従業員 ' + (state.employees.length + 1))`（`app.js:5504`）
+        ⇒ ★違えば ★止める（未測定）★＝★他人の 人に 名前を 打ち込まない★★
+   ★★私が 一度 間違えた 案も 残します（★同じ 穴に 落ちない 為★）★★
+     ★私の 案★ … 「足す 前の 番号を 控えて ★無かった 番号★ を 取る」
+     ★なぜ 駄目か★ … 番号は `push` で ★0..n-1 に 詰まって いる★
+        ⇒ ★★『無かった 番号』は ★いつも 最大★＝並び順に 頼るのと 同じ★★
+        ⇒ ★★＋差分は ★いつも 1個★＝★『0個か2個以上で 止める』は 1回も 働かない★★
+        ⇒ ★★＝★偽の 見張り★に なる 所でした（指示役1 が 字を 読んで 止めた）★★ */
+/* ★★画面からは ★材料を 取るだけ★／判じは 上の `eraboFuda` 1か所★★
+   ＝★同じ 状態を 2つの 所で 別々に 判じない★（記憶の 決まり） */
+const FUDAS = await fudaWoAtsumeru(pg);
+const FUDA = eraboFuda(FUDAS);
+if (FUDA.idx === null) {
+  console.log('  🟡 ★未測定★ ' + FUDA.naze
+    + '（全 ' + (FUDA.mai != null ? FUDA.mai : 0) + '枚／番号の 最大値の 札の 名前＝「'
+    + (FUDA.na != null ? FUDA.na : '（取れない）') + '」／一番 下の 札は 番号 '
+    + (FUDA.shita != null ? FUDA.shita : '（無い）') + '）'
+    + '★＝他人の 人に 名前を 打ち込まない ので 止めます★'
+    + '（★絞り込み／部署の 束ね／描き直しの 遅れ の どれか★）');
+  await b.close(); srv.close(); process.exit(2);
+}
+const IDX = FUDA.idx;
 const CARD = '#emp-list .mco[data-i="' + IDX + '"]';
-console.log('  （今 足した 人＝札 ' + IDX + '番目／全 '
-  + (await pg.evaluate(() => document.querySelectorAll('#emp-list .mco').length)) + '枚）');
+console.log('  （今 足した 人＝★番号 ' + IDX + '（最大）★／名前「' + FUDA.na + '」／全 ' + FUDA.mai + '枚'
+  + '／★一番 下の 札は 番号 ' + FUDA.shita + '★'
+  + (String(FUDA.shita) === String(IDX) ? '＝同じ' : '★＝違う＝前の 形なら ここで 外れて いました★') + '）');
 /* ★足した その場で もう 開いている★（#b-add-emp が state.open[e.id]=true を している）
    ⇒★ここで 押すと 逆に 閉じる★（2026-09-05 実測＝これで 1時間 空振りした） */
 await tataku(pg, CARD + ' [data-dtoggle]'); await machi(800);          /* 「詳細設定」 */

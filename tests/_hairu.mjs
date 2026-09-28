@@ -27,6 +27,56 @@ import { fileURLToPath } from 'node:url';
    ★黙って 緑に しない★＝★「ここでは 測れない・テスト線で 測っている」と 字で 言ってから★ 抜ける。
    ★これを 入れないと どうなるか★＝本番の CI が ★毎回 赤★（＝人が 赤を 見なくなる）。
    ★戻す条件★＝本番の CI に 試験用の 鍵を 置いた日。 */
+
+/* ★★★『今 足した 人』の 札を 選ぶ★★★（2026-09-28・★5本が 同じ 穴を 持って いた★）
+   ★ここに 置く 訳★ … ★判じを 1か所に する★（★同じ 状態を 5か所で 別々に 判じない★）
+     ＋★この 紙は ★読んでも 走りません★★（★`soshitsu-ui.mjs` から 借りると ★試験が 走り出す★）
+   ★入れる 物★ … `[{ i:'0', na:'山田' }, …]` ＝★DOM の 並び順★の 札（番号と 名前）
+   ★決め★
+     ⑴★番号（`data-i`）の ★最大値★ を 取る★
+        ＝`#b-add-emp` は `state.employees.★push★(e)`（`kyuyo/js/app.js:5504`）
+        ⇒ ★足した 人は ★いつも 最大の 番号★★（★部署で 束ね直しても 変わらない★）
+     ⑵★その 札の 名前が `従業員 N` の 形か★
+        ＝`defEmp('従業員 ' + (state.employees.length + 1))`（同 `:5504`）
+        ⇒ ★違えば ★止める（未測定）★＝★他人の 人に 名前を 打ち込まない★★
+   ★★なぜ 要るか（実測）★★
+     ★前の 形★ … `c[c.length - 1]`＝★DOM の 一番 下の 札★
+     `visibleEmpIdx()` は ★`dept` で 束ね／`empMatchesFilter` で 絞る★
+     ⇒ ★★`data-i` は 名簿の 番号＝★DOM の 順とは 別★★★
+     ⇒ ★★＝『一番 下の 札』は 足した 人 とは 限らない★★
+     ⇒ ★★＋その 直後に ★その 札に 名前を 打ち込む★＝★他人の 名前を 上書き★★★
+     ★赤に なった 実物★ … WebKit `36362080874`（資格喪失届・札 27）
+                        ／ WebKit `36369444650`（被扶養者・★前 27 → 後 28★）
+   ★★一度 間違えた 案（★残す★）★★
+     「足す 前の 番号を 控えて ★無かった 番号★ を 取る」
+     ⇒ 番号は `push` で ★0..n-1 に 詰まって いる★
+     ⇒ ★★『無かった 番号』は ★いつも 最大★＝並び順に 頼るのと 同じ★★
+     ⇒ ★★＋差分は ★いつも 1個★＝★『0個か2個以上で 止める』は 1回も 働かない★★（★偽の 見張り★） */
+export function eraboFuda(fudas) {
+  const a = Array.isArray(fudas) ? fudas : [];
+  if (!a.length) return { idx: null, naze: '札が 1枚も 無い' };
+  const shita = String(a[a.length - 1] && a[a.length - 1].i);
+  let saidai = -1, mono = null;
+  for (const x of a) {
+    const n = Number(x && x.i);
+    if (Number.isFinite(n) && n > saidai) { saidai = n; mono = x; }
+  }
+  if (!mono) return { idx: null, naze: '番号が 読めない 札しか 無い', shita: shita };
+  const na = String((mono.na || '')).replace(/\s+/g, ' ').trim();
+  if (!/^従業員\s*\d+$/.test(na)) {
+    return { idx: null, naze: '今 足した 人が 画面に 出て いない（名前が `従業員 N` の 形では ない）',
+      na: na, mai: a.length, shita: shita };
+  }
+  return { idx: String(saidai), na: na, mai: a.length, shita: shita };
+}
+
+/* ★★画面から 材料だけ 取る★★（★判じは 上の `eraboFuda` 1か所★） */
+export async function fudaWoAtsumeru(pg) {
+  return pg.evaluate(() => Array.from(document.querySelectorAll('#emp-list .mco'))
+    .map((x) => ({ i: x.getAttribute('data-i'),
+      na: ((x.querySelector('.mco-nm') || {}).textContent || '') })));
+}
+
 export async function kagiAru(root) {
   try {
     const { repoEnv } = await import('../scripts/repo-env.mjs');
@@ -68,7 +118,33 @@ export async function shizumaru(pg, shizuMs = 1500, ueMs = 20000) {
   }
 }
 
+/* ★★覆いの 中身を 出しに 出す 旗を ★道具に 持たせる★★★（2026-09-28・実測から）
+   ★何が 起きて いたか★
+     `store.js` は conflict の 覆いが 出た 瞬間の
+       ①倉庫の `updated_at` ②控えの `updated_at` ③★同じ 瞬間か★
+     を `Store._conflictLog` に 積み、★`window.__OOI_KIROKU__` が 立って いる 時だけ★
+     ★その場で 出しに 出します★（★開き直しても 残る 為★）。
+   ★ところが その 旗は `kyuyo/tests/fuyo-ui.mjs` ★1本にしか 立って いませんでした★
+     ⇒ ★他の 試験（`shutoku-ui` 等）では 中身が ★画面の 中に 溜まるだけ★★
+     ⇒ ★開き直すと 消える★＝★覆いが 12回 出ても 訳が 1つも 残らない★
+     （実測 2026-09-28 手元 `node kyuyo/tests/shutoku-ui.mjs`
+        … 覆い ★12回★／`souko=`／`hikae=` の 行 ★0本★＝★割れない★）
+   ⇒ ★★覚書は「読む」では 効かない＝★道具に 1回だけ 持たせる★★★
+     （`hairu()` は ★全部の 実ブラウザ 試験が 通る 1か所★）
+   ★客の 画面は 汚れません★＝旗が 無ければ `store.js` は 何も 出しません。
+   ★`addInitScript` は `goto` の 前に 要る★ので ★ここ（goto の 前）に 置きます★。
+   ★同じ 面に 二度 足さない★＝`_HATA` で 数えます。 */
+const _HATA = new WeakSet();
+async function _hataWoTateru(pg) {
+  if (_HATA.has(pg)) return;
+  _HATA.add(pg);
+  await pg.addInitScript(() => {
+    try { window.__OOI_KIROKU__ = true; } catch (e) { /* 黙らない＝下で 出ます */ }
+  }).catch((e) => { console.log('       🟡 覆いの 控えの 旗が 立ちません … ' + ((e && e.message) || e)); });
+}
+
 export async function hairu(pg, url, matsu, opt = 3) {
+  await _hataWoTateru(pg);
   const kaiMax = typeof opt === 'number' ? opt : (opt && opt.kaiMax) || 3;
   const kumoKotaeru = typeof opt === 'number' ? true : (opt && opt.kumo !== false);
   let matta = 0, naze = '', kumoNi = '';   /* kumoNi＝クラウドの 覆いに 答えた 字（空＝出なかった） */
@@ -222,7 +298,57 @@ export async function ooiWoMiru(pg) {
     if (!ov) return { aru: false, ji: '' };
     return { aru: true, ji: String(ov.innerText || ov.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200) };
   }, OOI).catch(() => ({ aru: false, ji: '★引けない★' }));
-  return Object.assign({}, r, { conflict: !!r.aru && TOJINAI_JI.some((w) => r.ji.indexOf(w) >= 0) });
+  const conflict = !!r.aru && TOJINAI_JI.some((w) => r.ji.indexOf(w) >= 0);
+  /* ★★覆いを ★3つに 割って★ 返す★★（2026-09-28）
+     ★足した 判じは 1つも ありません★＝`store.js` が 既に 積んで いる 物を ★読むだけ★。
+       `onaji`  … ①と②が ★同じ 瞬間★＝★字の 形だけの 偽 conflict★（`…Z` と `…+00:00`）
+       `chigau` … ★本当に 別の 書き★（他の 機械／他の 試験）
+       `miyomi` … ★控えが まだ 無い★＝★読み込みが 始まる 前の 隙★
+     ⇒ ★★この 3つの どれかで 直し方が 変わります★★
+       （`onaji`＝書式を 揃える／`chigau`＝倉庫を 分ける／`miyomi`＝隙を 閉じる）
+     ★読めない 時は 黙らず そう 書きます★＝★0件を 根拠に しない★ */
+  /* ★★『旗が 立ったか』を ★覆いが 出て いなくても★ 必ず 返す★★（2026-09-28・指示役1 の ㋐）
+     ★訳（指示役1 が 数えた）★ … ★実ブラウザらしい 紙 44本の うち `hairu()` を 呼ぶのは 21本★
+       ⇒ ★★23本は 旗が 立ちません★★（`admin-ui` `meisai-ui` `load-before-delete-live` …）
+     ⇒ ★★旗の 無い 試験の「覆い 0回」を ★緑と 読んで しまいます★★
+        ＝★今日 私が まさに それを しました★（覆い 12回 なのに `souko=` が 0本＝★割れない★）
+     ⇒ ★★『0』と『未測定』を 混ぜない★★＝★旗の 立ち を 数に 添える★ */
+  const hata = await pg.evaluate(() => {
+    try { return !!window.__OOI_KIROKU__; } catch (e) { return null; }
+  }).catch(() => null);
+  /* ★★立った 時も 字に 出します★★（2026-09-28・後から 足した）
+     ★訳★ … 立った 時に 黙ると ★「出なかった）」の 1行が ★裸★に なります★
+       ⇒ ★★『見て いて 0回』と『見て いない』が ★見分けられません★★★
+       ＝★『0』と『未測定』を 混ぜない の ★裏側★★ */
+  let wake = (hata === true ? '旗 立った' : (hata === false
+    ? '★旗が 立って いません＝覆いの 内訳は ★未測定★（0 では ない）★'
+    : '★旗を 読めません＝★未測定★★'));
+  if (conflict) {
+    const uchi = await pg.evaluate(() => {
+      try {
+        const S = window.Store;
+        if (!S || typeof S.ooiNoKazu !== 'function') return '★Store.ooiNoKazu が 無い＝割れません（未測定）★';
+        const k = S.ooiNoKazu();
+        const o = (typeof S.okuttaNoKazu === 'function') ? S.okuttaNoKazu() : null;
+        return '覆い ' + k.honsu + '回（★同じ瞬間=偽 ' + k.onaji + '／★別の書き ' + k.chigau
+          + '／★読む前の隙 ' + k.miyomi + '★）'
+          + (o ? ' ／自分が送った値で通した ' + o.toshita + '回・送った名簿 ' + o.meibo + '件' : '')
+          + (function(){
+              /* ★★`miyomi` の 直の 証し★★＝★読み込みを 待つ 8秒が 切れた 回数★
+                 ★切れた ら 控えが null の まま 保存に 進む★＝★覆いが 出る★
+                 ⇒ ★`kire` が 1回でも 在れば ★待ちの 上限が 足りて いない★★（客にも 出ます） */
+              if (typeof S.machiNoKazu !== 'function') return ' ／★待ちの 口が 無い（未測定）★';
+              const m = S.machiNoKazu();
+              return ' ／待った ' + m.kai + '回・★8秒で 切れた ' + m.kire + '回★'
+                + '・読み終えた ' + (m.yondaKa ? 'はい' : '★いいえ★')
+                + (m.msSaidai != null ? '・最長 ' + m.msSaidai + 'ms' : '');
+            })()
+          + (k.ji && k.ji.length ? ' ／' + k.ji.join(' ｜ ') : '');
+      } catch (e) { return '★控えが 読めません … ' + ((e && e.message) || e) + '（未測定）★'; }
+    }).catch((e) => '★控えを 引けません … ' + ((e && e.message) || e) + '（未測定）★');
+    wake = wake + '／' + uchi;
+  }
+  return Object.assign({}, r, { conflict: conflict, wake: wake });
 }
 
 /* ★案内の 覆いを 本物の 閉じる ボタンで 閉じる★（消す のでは ない＝お客さんの 道）
@@ -238,7 +364,7 @@ export async function toziru(pg, kaiMax = 12) {
     const mi = await ooiWoMiru(pg);
     if (mi.conflict) {
       console.log('  ★★覆いが 出て います（押せません）／★閉じません（答えません）★／箱の 字＝「'
-        + mi.ji + '」★★');
+        + mi.ji + '」★★' + (mi.wake ? String.fromCharCode(10) + '       ★訳の 内訳 … ' + mi.wake + '★' : ''));
       return (await pg.$$(OOI)).length;      /* ★残したまま 戻る★＝呼んだ側が 赤に する */
     }
     const oseta = await pg.evaluate((sel) => {

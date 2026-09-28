@@ -106,6 +106,156 @@ export async function katazukeru(pg, opt) {
   const osu = (opt && opt.osu) || null;
   const michi = [];
   if (!na && ban0 === null) return { ok: false, michi, naze: '名前も 札の 番号も 無い' };
+  /* ★★★『消したのに 開き直すと 戻る』を 割る 為の 控え★★★（2026-09-28）
+     ★実物★ … WebKit `36373592452`（`shutoku-ui`）
+        「⑤画面に 残り 0人」→「★⑥開き直して 数えた … 残り 1人★」（★覆いは 出て いない★）
+     ★これは 試験の 都合では ありません★ … ★客の 道（本物の click）で 消して います★
+        ⇒ ★★＝『お客さんが 人を 消しても 開き直すと 戻る』の 疑い★★
+     ★★指示役1 の 見立て（★3択★・★字だけ／まだ 見立て★）★★
+        ㋐`doSave` の 束は ①会社 ②`pay_employees` の 書き ③差分削除＝★並んで 走る★（`Promise.all`）
+           ⇒ ★★③が 消した 人を ②が ★書き戻す★ 競走★★
+              （②が 送る 一覧は ★消す 前★の 物＝その 人が まだ 入って いる 回が 在る）
+        ㋑★`DELETE` が 1本も 無い★ ⇒ ★③が 走って いない（別の 因）★
+        ㋒★`DELETE` は 在り 書きは その 前★ ⇒ ★倉庫の 側／別の 因★
+     ★★割る には ★出した 順・着いた 順★が 要ります★★
+        ⇒ ★この 道具は ★要求を 1本も 控えて いませんでした★（数えた＝0件）★
+        ⇒ ★★だから ここに 入れます＝★片づけを 使う 試験 ぜんぶに 効きます★★★
+     ★控えるのは `pay_employees` だけ★＝★出しを 膨らませません★
+     ★倉庫にも アプリにも 触りません★（★見るだけ★） */
+  const HITO = [];
+  let _hitoN = 0;
+  try {
+    const tanaKa = (u) => String(u).indexOf('/rest/v1/pay_employees') >= 0;
+    pg.on('request', (r) => {
+      try {
+        if (!tanaKa(r.url())) return;
+        const n = ++_hitoN;
+        /* ★★どの id を 触った 要求か まで 控える★★（2026-09-28）
+           ★訳（★『組 5組』だけでは 2つの 説を 割れません★）★
+             ㋐★飛んで いた 書きが DELETE の 後に 着いて 書き戻した★
+             ㋑★★DELETE の `in(...)` に 狙いの id が 入って いなかった★★
+                （`store.js:542` … `rm = 倉庫のid − 今の名簿のid` ⇒ `delete().in('id', rm)`
+                  ★`.select()` を 付けて いない★＝★`204` は「消えた 行数」を 教えません★
+                  ＋★この 試験口座には 前の 回の 人が 28人 残って います★
+                  ⇒ ★DELETE は ★別の 残り物★を 消して 204 を 返せます★）
+           ⇒ ★★どちらも「残り 1人」を 作ります＝★組の 数では 割れません★★★
+           ★割り方★ … ★DELETE が 消せと 言った id★ ∩ ★DELETE の 後に 着いた 書きの 中の id★
+             ・★重なり ≥1★ ⇒ ★★㋐（消した 行が 書き戻された）★★
+             ・★重なり 0★  ⇒ ★★㋑（そもそも 狙いを 消して いない）★★
+           ★倉庫にも アプリにも 触りません★＝★要求の 字を 読むだけ★ */
+        let ids = [];
+        try {
+          if (r.method() === 'DELETE') {
+            /* supabase-js の `.in('id', rm)` は `?id=in.(a,b,c)` に なります */
+            /* ★★括弧は `%28`/`%29` に 逃がされます★★（2026-09-28 手元で 実測
+               … 逃がしたまま 合わせに 行って ★「id 一覧が 読めません（未測定）」★と 出ました
+               ＝★物差しが 自分の 穴を 言ったので 気づけました★） */
+            const u0 = (() => { try { return decodeURIComponent(String(r.url())); } catch (e) { return String(r.url()); } })();
+            const m = u0.match(/[?&]id=in\.\(([^)]*)\)/);
+            if (m) ids = String(m[1]).split(',').map((x) => x.replace(/^"|"$/g, '').trim()).filter(Boolean);
+          } else {
+            const b = r.postData();
+            if (b) ids = (String(b).match(/"id"\s*:\s*"([^"]+)"/g) || [])
+              .map((x) => (x.match(/"id"\s*:\s*"([^"]+)"/) || [])[1]).filter(Boolean);
+          }
+        } catch (e) { ids = []; }
+        HITO.push({ n: n, muki: r.method(), dashi: Date.now(), tsuita: 0, jotai: 0, shippai: '', ids: ids });
+        r.__hitoN = n;
+      } catch (e) { /* 控えで 転ばない */ }
+    });
+    pg.on('response', (res) => {
+      try {
+        if (!tanaKa(res.url())) return;
+        const e = HITO.find((x) => x.n === res.request().__hitoN);
+        if (e) {
+          e.tsuita = Date.now(); e.jotai = res.status();
+          /* ★★DELETE の 返り本文に ★本当に 消えた id★ が 出ます★★（2026-09-28・指示役1 の ④）
+             ★訳★ … `store.js` に `.select('id')` を 付けた ので `204` → `200 ＋ 本文` に なりました
+             ★なぜ 画面の 中の 控え（`Store.kesuNoKazu()`）を 使わないか★
+               ⇒ ★片づけは ⑥で ★開き直し（reload）★を します★＝★画面の 中の 控えは 消えます★
+               ⇒ ★★今日 覆いの 控えで 同じ 穴を 踏みました（『0』と『未測定』が 混ざった）★★
+               ⇒ ★★＝★要求の 本文★は ★開き直しでも 消えません★★＝★ここで 取ります★
+             ★`res.json()` は 後から 引けない 事が 在る★ので ★その場で 約束を 控えます★ */
+          if (e.muki === 'DELETE') {
+            e.kaeriP = res.json().then((j) => (Array.isArray(j) ? j : []).map((x) => x && x.id).filter(Boolean))
+              .catch(() => null);      /* ★null＝引けない＝未測定（0件では ない）★ */
+          }
+        }
+      } catch (e) { /* 同上 */ }
+    });
+    pg.on('requestfailed', (r) => {
+      try {
+        if (!tanaKa(r.url())) return;
+        const e = HITO.find((x) => x.n === r.__hitoN);
+        if (e) { e.tsuita = Date.now(); e.shippai = (r.failure() && r.failure().errorText) || '★訳が 取れない★'; }
+      } catch (e) { /* 同上 */ }
+    });
+  } catch (e) {
+    michi.push('⚠ ★人の 棚の 要求を 控えられません＝『消したのに 戻る』は 割れません★ … ' + (e && e.message));
+  }
+  /* ★出しに 出す 字を 作る★（★片づけの 終わりで 1行★） */
+  const hitoNoJi = async () => {
+    /* ★返り本文を 待つ（★引けなければ null＝未測定★） */
+    for (const x of HITO) { if (x.kaeriP) { try { x.kieta = await x.kaeriP; } catch (e) { x.kieta = null; } } }
+    if (!HITO.length) return '★人の 棚（pay_employees）への 要求 … ★0本＝控えられて いません（未測定）★★';
+    const del = HITO.filter((x) => x.muki === 'DELETE');
+    const kaki = HITO.filter((x) => x.muki === 'POST' || x.muki === 'PATCH');
+    /* ★★DELETE の 後に 書きが 着いて いるか★★＝★書き戻しの 競走★ */
+    const ato = [];
+    del.forEach((d) => {
+      const t = d.tsuita || d.dashi;
+      kaki.forEach((p) => {
+        if ((p.tsuita || p.dashi) > t) ato.push('出' + d.n + '(DELETE)→出' + p.n + '(' + p.muki + ')');
+      });
+    });
+    /* ★★2つの 説を 割る 数★★＝★DELETE が 消せと 言った id★ ∩ ★後から 着いた 書きの id★ */
+    const kesuId = [];
+    del.forEach((d) => (d.ids || []).forEach((i) => { if (kesuId.indexOf(i) < 0) kesuId.push(i); }));
+    const atoNoKaki = [];
+    del.forEach((d) => {
+      const t = d.tsuita || d.dashi;
+      kaki.forEach((p) => { if ((p.tsuita || p.dashi) > t && atoNoKaki.indexOf(p) < 0) atoNoKaki.push(p); });
+    });
+    const kasanari = [];
+    atoNoKaki.forEach((p) => (p.ids || []).forEach((i) => {
+      if (kesuId.indexOf(i) >= 0 && kasanari.indexOf(i) < 0) kasanari.push(i);
+    }));
+    const wake = (del.length === 0)
+      ? '★★DELETE が 1本も 無い＝差分削除が 走って いません（㋒）★★'
+      : (kesuId.length === 0
+        ? '★★DELETE の id 一覧が 読めません＝割れません（未測定）★★'
+        : (atoNoKaki.length === 0
+          ? '★後から 着いた 書きが 0本＝★㋐（書き戻し）は 在りません★'
+          : (kasanari.length
+            ? '★★㋐＝★消せと 言った id が 後から 着いた 書きに 入って います（' + kasanari.length
+              + '件・例 ' + kasanari.slice(0, 2).join(',').slice(0, 40) + '）★＝書き戻し★★'
+            : '★★㋑＝★後から 着いた 書きに ★消せと 言った id は 1つも 入って いません★'
+              + '⇒ ★DELETE が 狙いを 消して いない 疑い★（`204` は 消えた 行数では ない）★★')));
+    /* ★★『頼んだ』と『本当に 消えた』を 並べる★★（★向きで 意味が 逆＝指示役1 の ②★）
+       ・★頼んだ ＞ 消えた★ ⇒ ★消せて いない★
+       ・★★頼んだ ＜ 消えた★ ⇒ ★頼んだ より 多く 消えた＝★事故（お金の 紙が 消える 側）★★★
+       ・★返りが 引けない★ ⇒ ★★『未測定』と 書く（0件と 混ぜない）★★ */
+    const kesuJi = del.map((d) => {
+      const tanomi = (d.ids || []).length;
+      const kieta = (d.kieta === undefined) ? undefined : d.kieta;
+      if (kieta === undefined || kieta === null) return '出' + d.n + '＝頼んだ ' + tanomi + '件／★消えた 件数が 引けません（未測定）★';
+      const k = kieta.length;
+      return '出' + d.n + '＝頼んだ ' + tanomi + '件／★消えた ' + k + '件★'
+        + (k === tanomi ? '（合う）'
+          : (k < tanomi ? '★★⇒ 消せて いない（' + (tanomi - k) + '件 残った）★★'
+            : '★★★⇒ 頼んだ より 多く 消えた＝事故★★★'));
+    }).join(' ｜ ');
+    return '★人の 棚（pay_employees）… 全 ' + HITO.length + '本'
+      + '／DELETE ' + del.length + '本（★消せと 言った id ' + kesuId.length + '件★）／書き ' + kaki.length + '本'
+      + (kesuJi ? '／★★' + kesuJi + '★★' : '')
+      + '／★★DELETE の 後に 書きが 着いた 組 ' + ato.length + '組★★'
+      + (ato.length ? '（' + ato.slice(0, 5).join('・') + '）' : '')
+      + '／★★' + wake + '★★'
+      + (del.length === 0 ? '（★★DELETE が 1本も 無い＝差分削除が 走って いません★★）' : '')
+      + '／並び … ' + HITO.slice(0, 12).map((x) => '出' + x.n + ' ' + x.muki
+        + (x.jotai ? ' ' + x.jotai : '') + (x.shippai ? '「' + x.shippai + '」' : '')).join('・')
+      + (HITO.length > 12 ? '（★他 ' + (HITO.length - 12) + '本＝切りました★）' : '') + '★';
+  };
 
   /* ── ①確定が 在れば 先に 取り消す（入力の 画面） ─────────────
      ★`data-undo-month` は ★今 選んでいる 1か月だけ★を 下書きに 戻す★
@@ -400,6 +550,34 @@ export async function katazukeru(pg, opt) {
         michi.push('     ⇒ ★札が 動いた（「' + (fudaMae || '空') + '」→「' + fuda.save + '」）＝★保存は 走った★');
       }
     } else michi.push('⑤-2 ★客が 見て いる 字を 引けません★');
+  /* ★★⑤-3 差分削除を 走らせたか＝★開き直す 前に★ 読む★★（2026-09-28・実測から）
+     ★訳★ … ⑥で 開き直す ので ★画面の 中の 控えは そこで 消えます★
+       （★今日 覆いの 控えで 同じ 穴を 踏みました★）
+     ★見る 所★ … `Store.sabunNoKazu()`
+       `hashitta`＝走った ／ ★`yomazu`＝読み込めて いない（`cloudLoaded` が 偽）★ ／ `kara`＝手元に 人が 0人
+     ⇒ ★★`yomazu ≥ 1` なら ★客が 消したのに 倉庫へ 消しが 行って いない★★★ */
+  try {
+    const sb = await pg.evaluate(() => {
+      try {
+        const S = window.Store;
+        if (!S || typeof S.sabunNoKazu !== 'function') return null;
+        const r = S.sabunNoKazu();
+        /* ★保存を 列に した 直しが ★何回 効いたか★ を 隣に 出す★（★0回なら 未測定★） */
+        r.retsu = (typeof S.retsuNoKazu === 'function') ? S.retsuNoKazu() : null;
+        return r;
+      } catch (e) { return null; }
+    });
+    michi.push('⑤-3 ★差分削除… ' + (sb === null
+      ? '★口が 無い＝未測定（0回では ない）★'
+      : ('走った ' + sb.hashitta + '回／★読み込めて いない ' + sb.yomazu + '回★／手元が 空 ' + sb.kara
+        + '回（全 ' + sb.zen + '回）'
+        + (sb.yomazu ? '　★★⇒ 消しが 倉庫へ 行って いない 回が 在ります★★' : '')
+        + '　／★列… ' + (sb.retsu
+          ? ('送った ' + sb.retsu.hashitta + '回／★待たせた ' + sb.retsu.matta + '回★／畳んだ '
+            + sb.retsu.tatanda + '回'
+            + ((sb.retsu.matta || sb.retsu.tatanda) ? '' : '＝★重なりが 1回も 起きて いません（この 直しは 未測定）★'))
+          : '★口が 無い＝未測定★') + '★')) + '★');
+  } catch (e) { michi.push('⑤-3 ★差分削除の 数を 引けません＝未測定★ … ' + (e && e.message)); }
   } catch (e) { michi.push('⑤-2 ★札を 引く 所で 転びました … ' + String((e && e.message) || e).slice(0, 80) + '★'); }
 
   /* ★★⑥開き直して もう一度 数える★★（2026-09-19 実測で 足した）
@@ -459,8 +637,26 @@ export async function katazukeru(pg, opt) {
       michi.push('⑥★落ち着きません★（札 ' + zen + '枚／この人 ' + mae + '人＝最後に 見た 数）');
     }
   } catch (e) { nokori2 = -1; }
+  /* ★★『覆いは 出なかった』と 言う 時は ★旗が 立って いたか★ を 添える★★（2026-09-28・指示役1 の ㋐）
+     ★訳★ … 旗（`window.__OOI_KIROKU__`）が 立って いなければ
+       `store.js` は 覆いの 内訳を ★出しに 出しません★
+       ⇒ ★★『出なかった』は『出て いない』でなく『★見て いない★』★★
+       ⇒ ★『0』と『未測定』を 混ぜない★（★今日 私が それで 半日 因を 見失いました★） */
+  const _ooiWake = await (async () => {
+    try { const { ooiWoMiru } = await import('../../tests/_hairu.mjs');
+      const m = await ooiWoMiru(pg); return m.wake || ''; } catch (e) { return '★内訳を 引けません（未測定）★'; }
+  })();
   michi.push('⑥開き直して 数えた … 残り ' + nokori2 + '人（待った ' + matta + '回'
-    + '／クラウドの 覆い ' + (kumo ? '「' + kumo + '」を 押した' : '出なかった') + '）');
+    + '／クラウドの 覆い ' + (kumo ? '「' + kumo + '」を 押した' : '出なかった') + '）'
+    + (_ooiWake ? '　★' + _ooiWake + '★' : ''));
+  /* ★★★『消したのに 戻る』を 割る 1行★★★（2026-09-28）
+     ★★必ず 出します（残っても 残らなくても）★★
+       ＝★『0人だった 回の 並び』も 材料に なります★（★正しい 回と 見比べられる★）
+     ★見る 所★
+       ・★DELETE が 0本★ ⇒ ★差分削除が 走って いない★
+       ・★DELETE の 後に 書きが 着いた 組 ≥1★ ⇒ ★★書き戻しの 疑い★★
+       ・★どちらでも ない★ ⇒ ★倉庫の 側／別の 因★ */
+  michi.push('⑥-2 ' + (await hitoNoJi()));
   if (nokori2 < 0) {
     return { ok: false, michi, naze: '★開き直しても 数えられない★（0人とは 言えません）' };
   }
