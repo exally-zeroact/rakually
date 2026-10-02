@@ -2541,7 +2541,7 @@
     /* ★★「今月を確定」も 下に 貼り付く★★（2026-09-25 司さんの 条件・上の 帯と 同じ 訳）
        ★背景を 必ず 持たせる★＝持たせないと ★下の 札が 透けて 字が 重なる★
        ★`bottom:0`★＝窓の 一番 下／`z-index` は 上の 帯と 同じ 30 */
-    var confirmBtn='<div style="position:sticky;bottom:var(--bn-h,0px);z-index:29;background:#F0FAF4;border-top:1px solid #C8ECD8;display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:14px 0 0;padding:10px 0 8px"><button class="btn-primary" data-confirm-month'+((prefMiss.missingCount||soukoTomeru)?' disabled':'')+' style="flex:0 0 auto;padding:11px 18px;font-size:14px">今月を確定（'+(soukoTomeru?soukoTomeru:(prefMiss.missingCount?'県が未選択'+prefMiss.missingCount+'名':'台帳・年調に反映'))+'）</button>'
+    var confirmBtn='<div style="position:sticky;bottom:calc(var(--bn-h,0px) + var(--sa-h,0px));z-index:29;background:#F0FAF4;border-top:1px solid #C8ECD8;display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:14px 0 0;padding:10px 0 8px"><button class="btn-primary" data-confirm-month'+((prefMiss.missingCount||soukoTomeru)?' disabled':'')+' style="flex:0 0 auto;padding:11px 18px;font-size:14px">今月を確定（'+(soukoTomeru?soukoTomeru:(prefMiss.missingCount?'県が未選択'+prefMiss.missingCount+'名':'台帳・年調に反映'))+'）</button>'
       +(cnt.need>0?'<span style="font-size:11px;color:#92500A;font-weight:700;white-space:nowrap">未確認 '+cnt.need+'名</span>':'<span style="font-size:11px;color:#333333;font-weight:700;white-space:nowrap">✓ 確認済</span>')
       /* ★この月の確定を 取り消す★（2026-09-07 司さん「やって」）
          ★確定済みの 月にだけ 出す★＝押せない物を 並べない。
@@ -6524,19 +6524,44 @@
   function stripTransient(e){ var o={}; for(var k in e){ if(Object.prototype.hasOwnProperty.call(e,k)&&k.charAt(0)!=='_') o[k]=e[k]; } return o; }
   function snapshot(){ return { v:1, company:state.company, employees:(state.employees||[]).map(stripTransient), month:state.month, theme:state.theme, prefer:state.prefer, depts:state.depts, roles:state.roles, showRetired:state.showRetired, bonus:state.bonus, confirmed:state.confirmed, nencho:state.nencho, onboardDone:state.onboardDone, onboardOutput:state.onboardOutput, payPatterns:state.payPatterns }; }
   var _saveT=null;
+  /* ★★保存できなかった時の 帯（#save-alert）を 出し入れする 1か所★★（2026-10-02）
+     ★なぜ★ … 失敗の 字は #save-status（入力画面の 帯の 中）にしか 書かれず、
+       ★設定・一覧・印刷・振込の 4画面では 1文字も 出なかった★（客は 保存できていないのに 気づかない）。
+       toast は 1枚を 上書きする（後の 札が 前の 札を 黙って 消す）ので ★失敗の 知らせには 使わない★。
+     ★判じ★ … ★字（⚠ など）では 決めない★＝呼ぶ 側が 種類を 渡す（'ng'＝出す／'ok'＝保存できた ので 消す）。
+       ★それ以外（種類なし）では 今の まま★＝失敗の 間に 別の 字が 入っても 帯は 消えない。 */
+  function hozonFuda(kind, t){
+    var el=document.getElementById('save-alert'); if(!el) return;
+    if(kind==='ng'){ el.textContent=t; el.hidden=false; }
+    else if(kind==='ok'){ el.hidden=true; el.textContent=''; }
+    else return;
+    saFit();
+  }
+  /* ★帯の 高さを 字で 置く（--sa-h）★＝入力画面の「今月を確定」の 帯（同じく 下のナビの 上に 貼り付く）を その分 持ち上げる
+     ★無いと★ … 確定の 帯の 下の 警告の 箱が ★この 帯を 隠した★（2026-10-02 WebKit 実測・帯の 真ん中に DIV.cr-warn）
+     ★高さは 決め打ちに しない★＝実物を 測る（--bn-h と 同じ 手）／隠れている 時は 0
+     ★呼ぶ 所は 2つ★ … 帯を 出し入れした 時（hozonFuda）と ★幅が 変わった 時（bnFit と 同じ 受け手）★＝折り返しで 高さが 変わる */
+  function saFit(){
+    var el=document.getElementById('save-alert');
+    var h=(el&&!el.hidden)?Math.round(el.getBoundingClientRect().height):0;
+    // 包まない＝転んだら 黙らずに 出る（何もしない catch を 増やさない）
+    document.documentElement.style.setProperty('--sa-h', h+'px');
+  }
   // ★保留した保存を 出す時に「その時点の 新しい中身」を 渡す★(store.js の saveHold が呼ぶ)。
   //  これが無いと、読み込み前の 古い一覧で 倉庫を 上書きしてしまう(2026-09-03 P0)。
   try{ if(window.Store&&Store.setSnapshotFn) Store.setSnapshotFn(function(){ return snapshot(); }); }
   catch(e){ /* ★黙らない★＝この口が 付かないと 保留した保存が 古い一覧を 出す恐れがある */
     console.error('★保存の 保留に「新しい中身」を 渡す口が 付きませんでした★', e);
     var _ss=document.getElementById('save-status'); if(_ss) _ss.textContent='⚠ クラウド保存の 準備に 失敗（開き直してください）';
+    hozonFuda('ng', '⚠ クラウド保存の 準備に 失敗（開き直してください）');
   }
   function persistSave(){
     var snap=snapshot(), lsOk=true, _kumoP=null;
     try{ localStorage.setItem(PKEY, JSON.stringify(snap)); }catch(e){ lsOk=false; }
     var d=new Date(), hhmm=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
-    var setS=function(t){ var e=document.getElementById('save-status'); if(e) e.textContent=t; };
-    if(!lsOk) setS('⚠ 保存できません（このブラウザの空き容量）'); // 容量超過を握り潰さず表示
+    /* kind＝'ng'（保存できなかった）／'ok'（保存できた）＝★どの画面でも 見える 帯★（hozonFuda）にも 渡す */
+    var setS=function(t, kind){ var e=document.getElementById('save-status'); if(e) e.textContent=t; hozonFuda(kind, t); };
+    if(!lsOk) setS('⚠ 保存できません（このブラウザの空き容量）', 'ng'); // 容量超過を握り潰さず表示
     if(window.Store&&Store.cloudSaveState){
       // ★クラウド保存の成否を待ってから表示(失敗を「保存済」と嘘表示しない)
       /* ★雲に保存できていないのに 黙らない★（この端末にしか無い状態になる）
@@ -6560,7 +6585,7 @@
       .then(function(r){
         // no-user=未ログイン=クラウド対象外(ローカル保存が正)→警告しない。ログイン中の実失敗のみ警告。
         if(r&&r.ok===false&&r.reason==='conflict'){ // ★楽観ロック: 上書きせず警告(データ消失防止)。neverSynced=別端末更新でなく"クラウド未読込"→文言を分ける
-          setS(r.neverSynced ? '⚠ クラウドに保存済みのデータがあります（未読込）' : '⚠ 別の端末で更新されました（クラウド未保存）');
+          setS(r.neverSynced ? '⚠ クラウドに保存済みのデータがあります（未読込）' : '⚠ 別の端末で更新されました（クラウド未保存）', 'ng');
           /* ★★★客の 行き止まりを 直す★★★（2026-09-28・実測から）
              ★前の 形★ … 
                 ⇒ ★★１回 訊いて「いいえ」を 押したら ★二度と 訊かない★★
@@ -6598,17 +6623,20 @@
             });
           }
         }
-        else if(r&&r.ok===false&&r.reason!=='no-user'){ setS('⚠ クラウド未保存（'+(r.reason||'通信エラー')+'）'); }
-        else if(lsOk){ state._savedAt=hhmm; setS('自動保存済 '+hhmm); }
+        /* ★わざと 書かなかった 物は 失敗では ない★（no-user＝未ログイン／held-skipped＝読み込み後に 古い一覧を 出さなかった／
+           held-skipped-maboroshi＝幻の 人を 書かなかった）＝★帯に 出すと 嘘の 警告が 全画面に 広がる★ので 名前で 除く。
+           ★知らない 理由は 失敗として 出す★（出す 側に 倒す） */
+        else if(r&&r.ok===false&&r.reason!=='no-user'&&r.reason!=='held-skipped'&&r.reason!=='held-skipped-maboroshi'){ setS('⚠ クラウド未保存（'+(r.reason||'通信エラー')+'）', 'ng'); }
+        else if(lsOk){ state._savedAt=hhmm; setS('自動保存済 '+hhmm, 'ok'); }
         return r;                       /* ★★返事を そのまま 返す★★＝★呼んだ 側が 言い回しを 決められる★ */
       }).catch(function(e){
-        if(lsOk) setS('⚠ ローカルのみ保存（クラウド通信エラー）');
+        if(lsOk) setS('⚠ ローカルのみ保存（クラウド通信エラー）', 'ng');
         /* ★★飲み込みません★★＝★呼んだ 側が『届いて いない』と 言える 形で 返す★
            （★投げ直すと 今までの 呼び出し（返りを 見ない 物）が ★未処理の 転び★に なります★
              ⇒ ★だから ★値で 返す★＝`ok:false`★） */
         return { ok:false, reason:(e&&e.message)||'通信エラー' };
       });
-    } else if(lsOk){ state._savedAt=hhmm; setS('自動保存済 '+hhmm); }
+    } else if(lsOk){ state._savedAt=hhmm; setS('自動保存済 '+hhmm, 'ok'); }
     /* ★★★ここを 飛ばすと 明細の 保存が 止まります★★★（2026-09-28・★自分の 直しで 1回 踏んだ★）
        ★踏んだ 形★ … 雲の 枝で `return` した ⇒ ★この 行に 来なく なった★
        ⇒ ★★＝★人の 保存は 通る のに 明細が 保存されない★★＝★お金の 紙が 出なく なる★
@@ -6766,6 +6794,7 @@
       var n=document.querySelector('.botnav');
       var h=n?Math.round(n.getBoundingClientRect().height):0;
       try{ document.documentElement.style.setProperty('--bn-h', h+'px'); }catch(_){ /* 古い browser */ }
+      saFit();   /* ★幅が 変わると 帯の 折り返しも 変わる★＝同じ 受け手で 測り直す */
     }
     bnFit();
     window.addEventListener('resize', bnFit);
