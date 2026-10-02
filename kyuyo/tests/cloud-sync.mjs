@@ -40,7 +40,7 @@ function makeMock(opts) {
       const rows = opts.ledgerRows || [];
       res = { data: rows, count: (opts.ledgerCount != null ? opts.ledgerCount : rows.length), error: opts.ledgerError || null };
     } else {
-      const data = kind === 'companyData' ? ((opts.companyData || _cua) ? { data: opts.companyData, updated_at: _cua } : null)
+      const data = kind === 'companyData' ? ((opts.hideCompanyRow) ? null : (opts.companyData || _cua) ? { data: opts.companyData, updated_at: _cua } : null)
         : kind === 'empIds' ? serverEmpIds.map(id => ({ id }))
           : (opts.serverEmps || []);
       res = { data, error: null };
@@ -119,6 +119,51 @@ function makeMock(opts) {
         const p = Promise.resolve(res);
         p.select = () => ({ single: () => Promise.resolve(res), maybeSingle: () => Promise.resolve(res), then: (f, r) => Promise.resolve(res).then(f, r) });
         return p;
+      },
+      /* ★★条件付き update（棚⑦・2026-10-03）★★＝store.js は会社を
+         `update({data,updated_at}).eq('account_id',uid).eq('updated_at',控え).select('updated_at')` で書く。
+         今のDBの updated_at（dbFormat は storedUA／他は curCompanyUA）と .eq('updated_at') が一致した時だけ
+         1行書けて、返りに新しい updated_at を返す。違えば0行（＝控えが古い＝誰かが書いた/応答落ち）。 */
+      update: (d) => {
+        const eqs = {};
+        const applyNow = () => {
+          if (table !== 'pay_companies') return { data: [], error: null };
+          calls.companyUpdate = calls.companyUpdate || [];
+          calls.companyUpdate.push(d);
+          if (opts.failUpsert) return { data: [], error: { message: 'update失敗' } };
+          /* ★★TOCTOUの隙＝事前SELECTと本書きの間に、自分の別の書き（この now）が倉庫へ着いた★★（新path専用）
+             ＝storedUA を この更新の updated_at（＝自分が送った値・名簿に在る）へ進めてから 0行を返す。
+               follow-up select は storedUA を返す → _jibunGaOkuttaKa で自分送りと分かり conflict にしない道を縛る。
+             ★一発★（次の やり直しでは 当たって 通る）。 */
+          if (opts.gapBumpStored) { opts.gapBumpStored = false; storedUA = dbFmt(d.updated_at); return { data: [], error: null }; }
+          /* ★ログイン切れ＝RLSで 行が 見えない★＝0行・書かない（follow-up select も null） */
+          if (opts.hideCompanyRow) return { data: [], error: null };
+          /* ★倉庫には書けて 返りだけ落ちた★＝storedUA は 進む／返りは error（控えは進まない） */
+          if (opts.companyStoredButError) { if (opts.dbFormat) storedUA = dbFmt(d.updated_at); return { data: [], error: { message: '返りが 落ちた（倉庫には 書けて いる）' } }; }
+          const cur = opts.dbFormat ? storedUA : curCompanyUA();
+          const kiso = eqs['updated_at'];
+          if (kiso != null && kiso === cur) {              /* 控えが今のDBと一致＝書ける */
+            const ret = dbFmt(d.updated_at);
+            if (opts.dbFormat) storedUA = ret;             /* 倉庫のUAが進む */
+            return { data: [{ updated_at: ret }], error: null };
+          }
+          return { data: [], error: null };                /* 0行（控えが古い） */
+        };
+        /* ★倉庫はすぐ書き換わる／返りは遅れる★＝applyNow(書き)は今・★返りだけ companyReplyDelay 遅らせる★
+           （㋒＝返り待ちの窓。列で save2 が待てば matta>0・自分送り名簿が通せば toshita>0 で縛る） */
+        const run = () => {
+          const r = applyNow();
+          if (table === 'pay_companies' && opts.companyReplyDelay) return new Promise((res) => setTimeout(() => res(r), opts.companyReplyDelay));
+          return Promise.resolve(r);
+        };
+        const b = {
+          eq: (k, v) => { eqs[k] = v; return b; },
+          select: () => b,
+          single: () => run().then(r => ({ data: (r.data && r.data[0]) || null, error: r.error })),
+          maybeSingle: () => run().then(r => ({ data: (r.data && r.data[0]) || null, error: r.error })),
+          then: (f, r) => run().then(f, r),
+        };
+        return b;
       },
       select: (cols, sopts) => { calls.selects.push({ table, cols, opts: sopts || {} }); return query(table === 'pay_ledger' ? 'ledger' : table === 'pay_companies' ? 'companyData' : cols === 'id' ? 'empIds' : 'emps', cols); },
       /* ★★消しも ★棚を 実際に 減らす★／`.select('id')` で ★消えた id を 返す★★★（2026-09-28）
@@ -648,6 +693,84 @@ runs.push(T('★★㋔: 消した 人が ★前の 保存★で 書き戻らな�
     + JSON.stringify(mock.__tana()) + '）');
 }));
 
+
+/* ★★★⑦-応答落ち: 倉庫には書けて 返りだけ落ちた後、2回目の保存を 誤conflictにしない★★★（2026-10-03・指示役）
+   ★何が怖いか★ … 条件付きupdateにした後、「線が約19秒で落ちる」で ★応答だけ★ 落ちると、
+     倉庫は自分が送った now に進むが 控えは古いまま → 次の .eq(古い控え) が0行 → 見えて控えと違う →
+     ★conflict★ に見える。でも書いたのは自分。朝直した①が別の道から戻る。
+   ★縛る物★ … 自分が送った値の名簿（送る前の now も入る・Date.parseで字形正規化）を見て 誤conflictにしない。 */
+runs.push(T('★⑦応答落ち: 倉庫に書けて返りが落ちた後、2回目の保存は誤conflictにしない', async function () {
+  const o = { dbFormat: true, companyData: { name: 'A' }, companyUpdatedAt: '2026-10-03T00:00:00.000+00:00' };
+  const mock = makeMock(o);
+  const Store = loadStore(mock);
+  await Store.cloudLoadState();                 // 控え=initialUA(DB書式)
+  o.companyStoredButError = true;               // 1回目＝倉庫には書けて 返りが落ちる
+  const r1 = await Store.cloudSaveState(SNAP);
+  ok(r1.ok === false, '1回目は返り落ちで ok:false（' + JSON.stringify(r1) + '）');
+  o.companyStoredButError = false;              // 返りは戻った（倉庫は自分のnowに進んでいる）
+  const r2 = await Store.cloudSaveState(SNAP);
+  ok(!(r2 && r2.reason === 'conflict'), '★2回目が自分の書きで誤conflictした（出たのは ' + JSON.stringify(r2) + '）');
+  ok(r2.ok === true, '★2回目が保存できていない（' + JSON.stringify(r2) + '）');
+}));
+
+/* ★★★⑦-ログイン切れ: 0行かつ行が見えない時は conflict でも no-user でもなく 帯が出る理由で返す★★★（2026-10-03・指示役）
+   ★退化を作らない★ … 「見えない→no-user」は app.js で黙る（帯が出ない）＝使用中に切れた人を黙らせる。
+     今(upsert)も RLS で転んで帯が出る。直し後も帯が出る形を保つ＝sync-check-failed（app.js:6644 で帯）。 */
+runs.push(T('★⑦ログイン切れ: 0行かつ行が見えない＝conflictにせず no-userにもせず sync-check-failed（帯）', async function () {
+  const o = { dbFormat: true, companyData: { name: 'A' }, companyUpdatedAt: '2026-10-03T00:00:00.000+00:00' };
+  const mock = makeMock(o);
+  const Store = loadStore(mock);
+  await Store.cloudLoadState();                 // 控え=initialUA（この時点では見える）
+  o.hideCompanyRow = true;                       // ★使用中にログインが切れた＝行が見えない★
+  const r = await Store.cloudSaveState(SNAP);
+  ok(r.ok === false, 'ok:false（' + JSON.stringify(r) + '）');
+  ok(r.reason !== 'conflict', '★conflictにした＝ログイン切れを別端末更新と嘘をつく（' + JSON.stringify(r) + '）');
+  ok(r.reason !== 'no-user', '★no-userにした＝帯が出ず黙る退化（' + JSON.stringify(r) + '）');
+  ok(r.reason === 'sync-check-failed', '★帯が出る理由(sync-check-failed)で返していない（出たのは ' + r.reason + '）');
+}));
+
+/* ★★★⑦-TOCTOU: ★新しい0行follow-upの名簿分岐★だけを縛る★★★（2026-10-03・指示役）
+   事前SELECTが捕まえない隙＝SELECTは控えと同じ値を返す（通す）→その後、本書きの .eq(控え) の前に
+   自分の別の書き(この now)が倉庫へ着く→0行→follow-up select は自分送りの値→conflictにせず控えを進め1回で通る。
+   ★この分岐を外すと（--waza相当）follow-up値!=控え で conflict に化ける＝下で手で確かめた（赤）。 */
+runs.push(T('★⑦TOCTOU: 事前SELECT後・本書き前に自分の書きが着いても、新path名簿で誤conflictにしない', async function () {
+  const o = { dbFormat: true, companyData: { name: 'A' }, companyUpdatedAt: '2026-10-03T01:00:00.000+00:00' };
+  const mock = makeMock(o);
+  const Store = loadStore(mock);
+  await Store.cloudLoadState();                 // 控え=initialUA
+  const rA = await Store.cloudSaveState(SNAP);  // save A（通常）→ 控え=nowA・名簿に nowA
+  ok(rA.ok === true, 'save A ok（' + JSON.stringify(rA) + '）');
+  o.gapBumpStored = true;                        // ★隙に自分の書き(nowB)が着く★＝本書きの直前に storedUA を進める
+  const rB = await Store.cloudSaveState(SNAP);   // save B：pre-check は控えと同値で通る→本書き0行→follow-upは自分送り
+  ok(!(rB && rB.reason === 'conflict'), '★新pathが自分の書きを誤conflictにした（出たのは ' + JSON.stringify(rB) + '）');
+  ok(rB.ok === true, '★save B が通っていない（' + JSON.stringify(rB) + '）');
+}));
+
+/* ★★★⑦-連鎖: 応答落ちが ★続いて★ も 控えが前進し、収まれば通る（自分で自分を弾き続けない）★★★（2026-10-03・指示役）
+   ★fuyo-ui で 1回 踏んだ赤（控えが止まり souko だけ進む conflict 連鎖）が、直しの狙いの真ん中。
+     線が落ちた間 会社の書きの応答が 連続で 落ちる＝倉庫は自分のnowに進む／控えは返らず古いまま。
+     ★縛る物★＝毎回 事前SELECTの自分送り分岐で控えが ★1つずつ前進★し、落ちが収まれば ★保存が通る★。
+   ★控えが前進しない＝conflict連鎖＝赤★（＝直す前の穴 or 新path穴。どちらでも ここで止める）。 */
+runs.push(T('★⑦連鎖: 応答落ちが続いても 控えが前進し 連鎖しない（収まれば通る）', async function () {
+  const o = { dbFormat: true, companyData: { name: 'A' }, companyUpdatedAt: '2026-10-03T02:00:00.000+00:00' };
+  const mock = makeMock(o);
+  const Store = loadStore(mock);
+  await Store.cloudLoadState();                 // 控え=U0
+  o.companyStoredButError = true;               // ★線落ちが続く＝会社の書きの応答が連続で落ちる★
+  let last = Store.okuttaNoKazu().toshita, stuck = 0;
+  for (let i = 0; i < 6; i++) {
+    await new Promise((r) => setTimeout(r, 3));  // ★実機は 保存が ≥500ms 間隔＝now が別の時刻★（mock が速すぎて同じ ms に なるのを防ぐ）
+    const r = await Store.cloudSaveState(SNAP);
+    const t = Store.okuttaNoKazu().toshita;     // 自分送りで控えが前進した回数
+    ok(r.ok === false, '落ちている間は ok:false（' + JSON.stringify(r) + '）');
+    if (i >= 1 && t <= last) stuck++;           // 2回目以降 前進していないと 連鎖
+    last = t;
+  }
+  ok(stuck === 0, '★控えが前進していない＝自分で自分を弾き続ける連鎖（停滞 ' + stuck + '回）');
+  o.companyStoredButError = false;              // 線が戻った
+  const rec = await Store.cloudSaveState(SNAP);
+  ok(rec.ok === true && rec.reason !== 'conflict', '★線が戻っても保存が通らない＝連鎖が残った（' + JSON.stringify(rec) + '）');
+}));
 
 await Promise.all(runs);
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
