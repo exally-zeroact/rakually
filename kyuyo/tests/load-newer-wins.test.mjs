@@ -301,6 +301,166 @@ if (!WAZA) {
         T('㉓ 確定済みの 明細が 落ちたら「保存できませんでした（台帳・年末調整に入っていません）」の 札が 出る', /保存できませんでした（台帳・年末調整に入っていません）/.test(fudaJi()), '札=' + fudaJi());
       } finally { win.Store.savePayslip = slipMoto; }
     }
+
+    /* ㉔〜㉗ ★確定を 外す・月を 取り消す 時の 明細の 保存が 落ちたら 帯で 言う★（2026-10-12・指示役＝確定の 扱いは 変えず 失敗を 言うだけ）
+       外すと confirmed:false の 明細を 送る。落ちると クラウドには confirmed:true の 古い 行が 残り、賃金台帳・年末調整が 数え続ける。
+       ★札でなく 帯★＝月の 取り消しは 後から「Web明細から 下げました」の 札を 出す（札は 1枚を 上書き＝取り合う）。帯は 通るまで 消さない。
+       ㉔ 1人の 確定を 外して 落ちたら 帯で 言う ㉕ クラウドの 保存が 通っても 帯を 消さない（「自動保存済」に しない）
+       ㉖ 次の 保存で 外した 人の 明細が 通れば 帯が 消える ㉗ 一度も 確定して いない 下書きが 落ちても この 帯は 出ない */
+    {
+      const slipMoto = win.Store.savePayslip;
+      const obi = () => { const el = doc.getElementById('save-alert'); return el && !el.hidden ? (el.textContent || '') : ''; };
+      const e24 = Object.assign(A.defEmp(), { id: 'e24', name: '外す人', pref: '東京都', birthYmd: '1990-01-01', base: 250000 });
+      const ym24 = A.state.month;
+      const okBtn = async () => { for (let k = 0; k < 20; k++) { const b = [...doc.querySelectorAll('.ui-modal-ov button, .ui-modal-card button')].find((x) => /OK/.test(x.textContent || '')); if (b) { b.click(); return true; } await sleep(50); } return false; };
+      try {
+        win.Store.cloudSaveState = () => Promise.resolve({ ok: true, coUA: '2026-10-12T08:00:00.000Z' });
+        const conf24 = {}; conf24[ym24] = { e24: true };
+        A.applyCloudState({ company: A.defCompany ? A.defCompany() : {}, employees: [e24], confirmed: conf24, _coUA: '2026-10-12T08:00:00.000Z' });
+        const sae = doc.getElementById('save-alert'); if (sae) { sae.hidden = true; sae.textContent = ''; }
+        win.Store.savePayslip = () => Promise.reject(new Error('倉庫で 落ちた'));
+        A.renderInput(); const b24 = doc.querySelector('#input-list .econf');
+        if (b24 && b24.checked) { b24.click(); await okBtn(); }
+        await sleep(1200);
+        T('㉔ 1人の 確定を 外して 保存が 落ちたら 帯で「確定の 取り消しを … 確定のまま」と 言う', /取り消し/.test(obi()) && /確定のまま/.test(obi()), '確定=' + JSON.stringify(A.state.confirmed[ym24]) + '／帯=' + obi());
+        A.persistSave(); await sleep(900);                                                   /* クラウドは 通る・明細は まだ 落ちる */
+        T('㉕ クラウドの 保存が 通っても 外した 人の 明細が 落ちて いる 間は 帯を 消さない', /取り消し/.test(obi()), '帯=' + obi());
+        win.Store.savePayslip = () => Promise.resolve({});                                   /* 通信が 戻った */
+        A.persistSave(); await sleep(900);
+        T('㉖ 次の 保存で 外した 人の 明細が 通れば 帯が 消える', obi() === '', '帯=' + obi());
+        const e27 = Object.assign(A.defEmp(), { id: 'e27', name: '下書きの人', pref: '東京都', birthYmd: '1990-01-01', base: 250000 });
+        A.applyCloudState({ company: A.defCompany ? A.defCompany() : {}, employees: [e27], confirmed: {}, _coUA: '2026-10-12T08:10:00.000Z' });
+        win.Store.savePayslip = () => Promise.reject(new Error('倉庫で 落ちた'));
+        A.persistSave(); await sleep(900);
+        T('㉗ 一度も 確定して いない 下書きが 落ちても「確定の 取り消し」の 帯は 出ない', !/取り消し/.test(obi()), '帯=' + obi());
+        /* ㉘ ★月の 確定を 取り消す（本物の [data-undo-month] を 押す）★＝2人とも 落ちたら 帯で「2名分」 */
+        const e28a = Object.assign(A.defEmp(), { id: 'e28a', name: '月の人A', pref: '東京都', birthYmd: '1990-01-01', base: 250000 });
+        const e28b = Object.assign(A.defEmp(), { id: 'e28b', name: '月の人B', pref: '東京都', birthYmd: '1991-01-01', base: 260000 });
+        const conf28 = {}; conf28[ym24] = { e28a: true, e28b: true };
+        win.Store.savePayslip = () => Promise.resolve({});
+        A.applyCloudState({ company: A.defCompany ? A.defCompany() : {}, employees: [e28a, e28b], confirmed: conf28, _coUA: '2026-10-12T08:20:00.000Z' });
+        await sleep(300); if (sae) { sae.hidden = true; sae.textContent = ''; }
+        win.Store.savePayslip = () => Promise.reject(new Error('倉庫で 落ちた'));
+        A.renderInput(); const um = doc.querySelector('[data-undo-month]');
+        if (!um) { T('㉘ 月の 取り消しの ボタンが 描かれる', false, '無い'); }
+        else {
+          um.click(); await okBtn(); await sleep(1500);
+          T('㉘ 月の 確定を 取り消して 2人とも 落ちたら 帯で「2名分の 確定の 取り消し」と 言う', /2名分の 確定の 取り消し/.test(obi()), '確定=' + JSON.stringify(A.state.confirmed[ym24]) + '／帯=' + obi());
+        }
+
+        /* ㉙㉚㉛ ★取り消しの 帯が 嘘に ならない・前からの 帯を 消さない★（taiketsu 10-12） */
+        const ymLabel = (ym) => { const m = /^(\d{4})-(\d{2})$/.exec(ym || ''); return m ? (m[1] + '年' + Number(m[2]) + '月') : ym; };
+        const e29 = Object.assign(A.defEmp(), { id: 'e29', name: '外す人29', pref: '東京都', birthYmd: '1990-01-01', base: 250000 });
+        const conf29 = {}; conf29[ym24] = { e29: true };
+        win.Store.savePayslip = () => Promise.resolve({});
+        A.applyCloudState({ company: A.defCompany ? A.defCompany() : {}, employees: [e29], confirmed: conf29, _coUA: '2026-10-12T08:30:00.000Z' });
+        await sleep(300); if (sae) { sae.hidden = true; sae.textContent = ''; }
+        /* ㉙ 印が 書けない（閉じないで）＋外した 人の 明細が 落ちる ⇒ 帯に「閉じないで」が 残る（取り消しの 字で 上書きしない） */
+        const SPh = win.Storage.prototype, mothSet = SPh.setItem;
+        win.Store.savePayslip = () => Promise.reject(new Error('倉庫で 落ちた'));
+        SPh.setItem = function (k, v) { if (k === 'payslip_syncmeta_v1') throw new win.DOMException('QuotaExceededError', 'QuotaExceededError'); return mothSet.call(this, k, v); };
+        /* 会社の 保存も 通信で 転ぶ（taiketsu の S3）＝届かないので「閉じないで」は 降りない（届けば 降りるのは 前からの 決め） */
+        const kumo29 = win.Store.cloudSaveState; win.Store.cloudSaveState = () => Promise.reject(new Error('no net'));
+        try { A.setConfirm('e29', false); A.persistSaveDebounced(); await sleep(1200); } finally { SPh.setItem = mothSet; win.Store.cloudSaveState = kumo29; }
+        T('㉙ 印が 書けない 時に 取り消しが 落ちても「閉じないで」を 消さない（両方 言う）', /閉じないで/.test(obi()) && /確定の 取り消し/.test(obi()), '帯=' + obi());
+        /* 片付け（印が 書ける 様に 戻し、明細も 通す） */
+        win.Store.savePayslip = () => Promise.resolve({}); A.persistSaveDebounced(); await sleep(1200);
+        /* ㉚ 外した 月を 離れたら 帯は その 月を 名指しする（「次の 保存で 送り直します」と 言わない） */
+        A.setConfirm('e29', true); win.Store.savePayslip = () => Promise.resolve({}); A.persistSave(); await sleep(700);
+        win.Store.savePayslip = () => Promise.reject(new Error('倉庫で 落ちた'));
+        A.setConfirm('e29', false); A.persistSave(); await sleep(900);
+        const ymMae = A.state.month; const [yy, mm] = ymMae.split('-').map(Number); const ymTsugi = mm === 12 ? (yy + 1) + '-01' : yy + '-' + String(mm + 1).padStart(2, '0');
+        win.Store.savePayslip = () => Promise.resolve({});
+        A.state.month = ymTsugi; A.persistSave(); await sleep(900);
+        T('㉚ 外した 月を 離れても 帯は その 月（' + ymLabel(ymMae) + '）を 名指しする', obi().indexOf(ymLabel(ymMae)) >= 0 && !/次の 保存で/.test(obi()), '帯=' + obi());
+        A.state.month = ymMae;
+        /* ㉛ 外した 人を 消したら 帯は 消える（控えの 持ち主が 居ない） */
+        win.Store.savePayslip = () => Promise.reject(new Error('倉庫で 落ちた')); A.persistSave(); await sleep(900);
+        A.state.employees = A.state.employees.filter((x) => x.id !== 'e29');
+        win.Store.savePayslip = () => Promise.resolve({}); A.persistSave(); await sleep(900);
+        T('㉛ 外した 人を 消したら 取り消しの 帯は 消える', !/確定の 取り消し/.test(obi()), '帯=' + obi());
+        /* ㉜ ★前の 字が 帯に 出た 後に 取り消しの 失敗が 届いても 前の 字を 消さない★（明細の 失敗が 会社の 保存より 後に 返る 順） */
+        const e32 = Object.assign(A.defEmp(), { id: 'e32', name: '外す人32', pref: '東京都', birthYmd: '1990-01-01', base: 250000 });
+        const conf32 = {}; conf32[ym24] = { e32: true };
+        win.Store.savePayslip = () => Promise.resolve({});
+        A.applyCloudState({ company: A.defCompany ? A.defCompany() : {}, employees: [e32], confirmed: conf32, _coUA: '2026-10-12T08:40:00.000Z' });
+        await sleep(300); if (sae) { sae.hidden = true; sae.textContent = ''; }
+        const kumo32 = win.Store.cloudSaveState; win.Store.cloudSaveState = () => Promise.reject(new Error('no net'));   /* 会社は すぐ 転ぶ＝帯「ローカルのみ保存」 */
+        win.Store.savePayslip = () => new Promise((_r, j) => setTimeout(() => j(new Error('倉庫で 落ちた')), 400));   /* 明細は 後から 落ちる */
+        try { A.setConfirm('e32', false); A.persistSave(); await sleep(1200); } finally { win.Store.cloudSaveState = kumo32; }
+        T('㉜ 前の 字（ローカルのみ保存）が 出た 後に 取り消しの 失敗が 届いても 両方 言う', /ローカルのみ保存/.test(obi()) && /確定の 取り消し/.test(obi()), '帯=' + obi());
+        /* ㉝ ★開き直しても 控えが 残り 帯が 戻る★（taiketsu 10-12 B＝前は メモリだけで 開き直すと 黙った） */
+        if (typeof A.hazushiWasureru !== 'function') { T('㉝ 試験の 口 hazushiWasureru が 在る', false, '無い'); }
+        else {
+          A.hazushiWasureru(); if (sae) { sae.hidden = true; sae.textContent = ''; }          /* メモリの 控えを 消す＝開き直しの 体 */
+          A.state.employees = [];                                                             /* ★開いた 直後は 名簿も まだ 無い★（本物の 開き直しと 同じ＝写しから 読む 前） */
+          A.persistLoad(); await sleep(300);
+          T('㉝ 開き直しても 端末に 控えが 残り 取り消しの 帯が 戻る', /確定の 取り消し/.test(obi()), '帯=' + obi() + '／端末=' + win.localStorage.getItem('payslip_hazushi_v1'));
+        }
+        /* ㉞ ★外した 後に 退職日を 前に 直して その月に 居ない 人は「自動では 送れない」と 言い分ける★（taiketsu 10-12 C） */
+        win.Store.savePayslip = () => Promise.reject(new Error('倉庫で 落ちた'));
+        const e32p = A.state.employees.find((x) => x.id === 'e32');
+        if (e32p) { e32p.retired = true; e32p.taishokuYmd = '2000-01-31'; }
+        A.persistSave(); await sleep(900);
+        T('㉞ その月に 居ない 人が 含まれる 時は 帯で「在籍」を 確かめる 様に 言う', /在籍/.test(obi()), '帯=' + obi());
+        if (e32p) { e32p.retired = false; e32p.taishokuYmd = ''; }
+        /* ㉟ ★月の 取り消しで 明細が 落ちたら 緑の「確定を取り消しました」を 出さない★（帯と 逆を 言わない） */
+        const e35 = Object.assign(A.defEmp(), { id: 'e35', name: '月の人35', pref: '東京都', birthYmd: '1990-01-01', base: 250000 });
+        const conf35 = {}; conf35[ym24] = { e35: true };
+        win.Store.savePayslip = () => Promise.resolve({});
+        A.applyCloudState({ company: A.defCompany ? A.defCompany() : {}, employees: [e35], confirmed: conf35, _coUA: '2026-10-12T08:50:00.000Z' });
+        await sleep(300); if (sae) { sae.hidden = true; sae.textContent = ''; }
+        win.Store.savePayslip = () => Promise.reject(new Error('倉庫で 落ちた'));
+        A.renderInput(); const um35 = doc.querySelector('[data-undo-month]');
+        const toastJi = () => { const t = doc.getElementById('app-toast'); return t ? (t.textContent || '').trim() : ''; };
+        if (um35) { const tt = doc.getElementById('app-toast'); if (tt) tt.textContent = ''; um35.click(); await okBtn(); await sleep(1500); }
+        T('㉟ 月の 取り消しで 明細が 落ちたら 札は「確定を取り消しました」と 言わない', !!um35 && !/確定を取り消しました/.test(toastJi()) && /保存できて/.test(toastJi()), '札=' + toastJi());
+
+        /* ㊱ ★送って いる 途中で 閉じた（machi の まま）控えも、開き直したら 帯で 言う★（taiketsu 10-12【2】） */
+        if (typeof A.hazushiWasureru === 'function') {
+          const e36 = Object.assign(A.defEmp(), { id: 'e36', name: '外す人36', pref: '東京都', birthYmd: '1990-01-01', base: 250000 });
+          const conf36 = {}; conf36[ym24] = { e36: true };
+          win.Store.savePayslip = () => Promise.resolve({});
+          A.applyCloudState({ company: A.defCompany ? A.defCompany() : {}, employees: [e36], confirmed: conf36, _coUA: '2026-10-12T09:00:00.000Z' });
+          await sleep(300); if (sae) { sae.hidden = true; sae.textContent = ''; }
+          win.Store.savePayslip = () => new Promise(() => {});                                 /* 返らない＝送って いる 途中 */
+          A.setConfirm('e36', false); A.persistSave(); await sleep(300);
+          A.hazushiWasureru(); A.state.employees = []; if (sae) { sae.hidden = true; sae.textContent = ''; }
+          A.persistLoad(); await sleep(300);                                                    /* 閉じて 開き直し */
+          T('㊱ 送って いる 途中で 閉じても 開き直したら 帯で「確定の 取り消し」と 言う', /確定の 取り消し/.test(obi()), '帯=' + obi() + '／端末=' + win.localStorage.getItem('payslip_hazushi_v1'));
+          win.Store.savePayslip = () => Promise.resolve({}); A.persistSave(); await sleep(900);
+          T('㊱ 送り直しが 通れば 帯は 消える', !/確定の 取り消し/.test(obi()), '帯=' + obi());
+        }
+        /* ㊲ ★月の 取り消しで 明細の 保存が 返らなくても 札は 待ち続けない（上限を 過ぎたら「まだ 終わって いない」と 言う）★（taiketsu【5】） */
+        {
+          const e37 = Object.assign(A.defEmp(), { id: 'e37', name: '月の人37', pref: '東京都', birthYmd: '1990-01-01', base: 250000 });
+          const conf37 = {}; conf37[ym24] = { e37: true };
+          win.Store.savePayslip = () => Promise.resolve({});
+          A.applyCloudState({ company: A.defCompany ? A.defCompany() : {}, employees: [e37], confirmed: conf37, _coUA: '2026-10-12T09:10:00.000Z' });
+          await sleep(300); if (sae) { sae.hidden = true; sae.textContent = ''; }
+          win.__HAZUSHI_MACHI_MS__ = 600;                                                       /* 試験では 上限を 短く */
+          win.Store.savePayslip = () => new Promise(() => {});                                 /* 返らない */
+          A.renderInput(); const um37 = doc.querySelector('[data-undo-month]');
+          const tt37 = doc.getElementById('app-toast'); if (tt37) tt37.textContent = '';
+          if (um37) { um37.click(); await okBtn(); await sleep(1500); }
+          T('㊲ 明細の 保存が 返らなくても 上限で「まだ 終わって いない」と 言う（黙らない・緑に しない）', !!um37 && /まだ 終わって いません/.test(toastJi()) && !/確定を取り消しました/.test(toastJi()), '札=' + toastJi());
+          delete win.__HAZUSHI_MACHI_MS__;
+        }
+        /* ㊳ ★明細の 保存が その場で 投げても 緑の 札を 出さない★（taiketsu【6】） */
+        {
+          const e38 = Object.assign(A.defEmp(), { id: 'e38', name: '月の人38', pref: '東京都', birthYmd: '1990-01-01', base: 250000 });
+          const conf38 = {}; conf38[ym24] = { e38: true };
+          win.Store.savePayslip = () => Promise.resolve({});
+          A.applyCloudState({ company: A.defCompany ? A.defCompany() : {}, employees: [e38], confirmed: conf38, _coUA: '2026-10-12T09:20:00.000Z' });
+          await sleep(300); if (sae) { sae.hidden = true; sae.textContent = ''; }
+          win.Store.savePayslip = () => { throw new Error('その場で 投げた'); };
+          A.renderInput(); const um38 = doc.querySelector('[data-undo-month]');
+          const tt38 = doc.getElementById('app-toast'); if (tt38) tt38.textContent = '';
+          if (um38) { um38.click(); await okBtn(); await sleep(1500); }
+          T('㊳ 明細の 保存が その場で 投げても 札は「確定を取り消しました」と 言わない（何かは 言う）', !!um38 && toastJi() !== '' && !/確定を取り消しました/.test(toastJi()), '札=' + toastJi() + '／帯=' + obi());
+        }
+      } finally { win.Store.savePayslip = slipMoto; }
+    }
   } finally { console.error = _ce; win.Store.cloudSaveState = kumoMoto; }
 
 } else {
