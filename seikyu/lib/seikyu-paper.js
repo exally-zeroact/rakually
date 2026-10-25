@@ -1305,22 +1305,34 @@
       var but = textOf(rc.note) || ((inv.no && noDasu(o)) ? ('請求書 ' + inv.no + ' の代金として') : '上記代金として');
       var sep = !!rc.taxSeparate && Number(rc.taxTotal) > 0;
       var rows = '';
+      /* ★源泉を 差し引いて 受け取った 時★（呼ぶ側が 全額の 時だけ 渡す）＝領収の 額は 実際に 受け取った 額の まま、
+         差し引いた 源泉徴収税額を 添える（源泉は 払う側が 国へ 納める＝受け取っていない 額を 領収と 書かない） */
+      var gen = Number(rc.gensen) || 0;
+      /* ★刷る 額と 印紙の 判定に 渡す 額を 同じ 材料から 作る★（taiketsu 10-24 止2）
+         st＝印紙の 判定に 渡す 物。刷る 税抜金額＝差し引く 前の 額（DOC.stampBeforeGensenOf(st)）。 */
+      var st = { amount: Number(rc.amount), taxTotal: Number(rc.taxTotal), taxSeparate: sep, gensen: gen };
+      /* ★繰越を 含む 紙の 全額★＝前回からの 繰越を 1行 分けて、残りを 今回の 1通の 税抜・消費税で 書く
+         （消費税額は 今回の 1通の 分だけ＝前の 月の 分は 前の 月の 紙に 書いてある）。印紙の 判定は st の まま（受け取った 額） */
+      var kuri = Number(rc.kurikoshi) || 0;
       if (sep) {
-        var base = Number(rc.amount) - Number(rc.taxTotal);
+        var base = DOC.stampBeforeGensenOf(st) - kuri;
         rows = '<table class="sums"><tbody>'
-          + '<tr><th>税抜金額</th><td>' + yen(base) + '</td></tr>'
+          + (kuri ? '<tr><th>前回からの繰越</th><td>' + yen(kuri) + '</td></tr>' : '')
+          + '<tr><th>' + (kuri ? '今回分 税抜金額' : '税抜金額') + '</th><td>' + yen(base) + '</td></tr>'
           + '<tr><th>消費税額等</th><td>' + yen(Number(rc.taxTotal)) + '</td></tr>'
-          + '<tr class="sums-g"><th>合計</th><td>' + yen(Number(rc.amount)) + '</td></tr>'
+          + (gen ? '<tr><th>源泉徴収税額</th><td>-' + yen(gen) + '</td></tr>' : '')
+          + '<tr class="sums-g"><th>' + (gen ? '差引お支払額' : '合計') + '</th><td>' + yen(Number(rc.amount)) + '</td></tr>'
           + '</tbody></table>';
       }
       /* ★印紙の注意は「要る時だけ」出す★。判定は seikyu-doc.js が唯一の正
          （区分して書けた時は、その消費税額を記載金額から外して数える＝No.7124）。 */
-      var stamp = DOC.stampNote({ amount: Number(rc.amount), taxTotal: Number(rc.taxTotal), taxSeparate: sep });
+      var stamp = DOC.stampNote(st);
       var memo = textOf(inv.data && inv.data.memo);
       return '<div class="rc-but"><span class="rc-but-l">但し　</span>'
         + '<span class="rc-but-b">' + esc(but) + '</span></div>'
         + '<div class="rc-ack">上記正に領収いたしました。</div>'
         + (rows ? '<div class="rc-sums">' + rows + '</div>' : '')
+        + (gen ? '<div class="rc-way rc-gen">源泉徴収税額 ' + Math.round(gen).toLocaleString('ja-JP') + '円 差引</div>' : '')
         + (rc.method ? '<div class="rc-way">お支払方法　' + esc(rc.method) + '</div>' : '')
         + (memo ? '<div class="note"><div class="note-h">備考</div><div class="note-b">' + esc(memo).replace(/\n/g, '<br>') + '</div></div>' : '')
         + (stamp ? '<div class="rc-stamp">' + esc(stamp) + '</div>' : '');

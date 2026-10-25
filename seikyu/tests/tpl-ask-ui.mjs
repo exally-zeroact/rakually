@@ -170,6 +170,10 @@ async function bootSet(appSrc, tane) {
   ok(tab, '設定のタブが 無い');
   tab.click();
   await sleep(400);
+  /* ★2026-10-23 設定を 3つに 分けた★（司さん ⑥）＝紙の 様式は「テンプレート」の 中。
+     ★お客さんと 同じ道★＝その 切り替えを 押す（押さないと 見本の 枠は 隠れたまま＝形が 0px で 測れない）。 */
+  const seg = r.doc.querySelector('#set-seg [data-setseg="tpl"]');
+  if (seg) { seg.click(); await sleep(100); }
   /* ★2026-09-10 6枚の 絵は 畳みました★（設定の 先頭 1,289px＝1.5画面ぶんを 占めていた）
      ＝今の紙は 1行で 見え、「変える」を 押した時だけ 絵が 出る。
      ★お客さんと 同じ道を 通す★＝ここで その ボタンを 押す。 */
@@ -363,8 +367,14 @@ if (!SELF) {
   const keep = fs.readFileSync(APP, 'utf8');
   const mark = '  function tplSync() {';
   if (keep.indexOf(mark) < 0) { console.log('  ★壊す場所が見つからない＝この自己診断は古い★'); process.exit(2); }
+  /* ★前回から 当てる所の 様式の 1行も 外す★（2026-10-23）
+     ＝「＋ 新しい請求書」で 当ての 印（guessDone）を 戻すように したので（mae-no-aite.mjs）、
+       2通目でも 前回から 当てる 側が 様式を 入れる。そのままだと tplSync を 壊しても ⑦ が 当ての 側で 緑に なり
+       「設定（tplSync）が 前回の紙を 効かせているか」を 見ていない 形に なる（⑦ の 註＝templateForPartner の 2番目）。 */
+  const guessTpl = /    if \(g\.templateId\) v\.template_id = g\.templateId;\r?\n/;
+  if (!guessTpl.test(keep)) { console.log('  ★壊す場所（前回の 様式を 当てる 1行）が見つからない＝この自己診断は古い★'); process.exit(2); }
   await run('設定を 入力に 効かせない seikyu-app.js（わざと壊した）',
-    keep.replace(mark, '  function tplSync() { return;'));
+    keep.replace(mark, '  function tplSync() { return;').replace(guessTpl, ''));
   const 取り逃し = Math.max(0, 2 - fail);            /* 2件以上のはず */
   console.log('\n  わざと壊した時に 赤になった数 … ' + fail + '件（2件以上のはず）');
   if (取り逃し) console.log('  ✗ ★空振りです★ 壊しても赤にならない');

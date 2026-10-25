@@ -170,8 +170,15 @@ await TA('1. ★3画面ぜんぶのボタンを1つ残らず押しても、JSが
     ok(el.innerHTML.length > 400, scr + ' の中身が薄い(' + el.innerHTML.length + ')');
     for (const b of [...el.querySelectorAll('button'), ...doc.querySelectorAll('.bn')]) {
       if (b.disabled) { pressed.push((b.id || b.textContent.trim()) + '(押せない)'); continue; }
+      /* ★取引先の「削除」は 確かめで「いいえ」★（2026-10-23 ⑤ 取引先を 消せるように した）
+         ＝「はい」で 押すと 取引先が 本当に 消え、この後の 試験（発行・一覧）の 前提が 崩れる。
+         押して JS が 落ちないかは ここで 見る／消す 中身は seikyu/tests/torihiki-sakujo-ui.mjs が 見る。 */
+      const ptDel = b.hasAttribute('data-pt-del');
+      const oc0 = win.confirm;
+      if (ptDel) win.confirm = () => false;
       b.click();
       await sleep(6);
+      if (ptDel) win.confirm = oc0;
       pressed.push(b.id || b.getAttribute('data-fil') || b.getAttribute('data-tm') || b.getAttribute('data-nm') || b.textContent.trim());
     }
     // 押した拍子に別の画面へ行っていたら戻す
@@ -408,11 +415,23 @@ T('2-a. ★タブの順と動詞を給与にそろえた（設定→入力→一
        ・分ける 理由（選ぶだけで 紙が 出る）は 確認を かぶせに して 無くなった
      ★集計は 消していない★＝一覧の 頭に 出しっぱなしに した（前は 引き出し2枚の 下）。
      ★給与と 同じ 3つ★（設定・入力・一覧）。 */
-  eq(tabs.join(' '), 'scr-set:設定 scr-edit:入力 scr-list:一覧',
+  /* ★★2026-10-23 「請求/集計」を 4つ目に 戻した★★（司さん「請求／集計のページを作って、
+       代行請求書と全く同じ作りでやって」）＝中身が 変わったので 守る物も 変えた。
+     ★設定→入力→一覧 の 順と「入力」の 言葉は 今までどおり★（給与と 同じ 頭3つ）。
+     ★集計の 置き場は 一覧の 頭 → 請求/集計 の 画面★（計算は 同じ REP.summarize 1本）。 */
+  eq(tabs.join(' '), 'scr-set:設定 scr-edit:入力 scr-list:一覧 scr-bill:請求/集計',
     'タブの順か言葉が違う');
-  /* ★集計が 消えていない★＝一覧の 頭で すぐ 見える（引き出しの 中に 戻さない） */
-  ok(doc.getElementById('rep-sum'), '★集計が 無くなっている★');
-  ok(doc.getElementById('rep-month'), '★集計する月を 選べない★');
+  /* ★★2026-10-23 一覧の 頭の 集計は 外した★★（司さん スマホの 赤丸）
+     ＝一覧の 頭は 代行請求と 同じ「会社」「期間」の 2つ＋「N件・合計」の 1行だけ。
+     集計は 別の「請求／集計」の 画面へ 移る（renderReport と seikyu-report.js は 残す）。
+     ★見る事を 入れ替えた★＝「一覧の 中に 集計の 欄が 無い」／「引き出しの 中にも 戻していない」。
+     集計が 描けるかは report.test.mjs ⑩〜⑬ と seikyuu-shuukei.mjs が 請求/集計の 画面で 見る。 */
+  const li = doc.getElementById('scr-list');
+  ok(!li.querySelector('#rep-sum') && !li.querySelector('#rep-month'), '★一覧の 頭に 集計が 残っている★');
+  /* ★集計が 消えていない★＝請求/集計 の 画面で 見える（引き出しの 中に 戻さない） */
+  const bill = doc.getElementById('scr-bill');
+  ok(bill && bill.contains(doc.getElementById('bk-rep-sum')), '★集計が 無くなっている★');
+  ok(bill && bill.contains(doc.getElementById('bk-rep-month')), '★集計する月を 選べない★');
   ok(!doc.getElementById('rep-box'), '★集計が また 引き出しの 中に 入っている★');
   ok(!/作る/.test([...doc.querySelectorAll('.bn')].map((b) => b.textContent).join('')), 'タブに「作る」が残っている（給与は「入力」）');
   // 開いた時に出ているのは入力（初めての人がそのまま1通 出せる）
@@ -1459,6 +1478,9 @@ await TA('6. 設定を保存すると自社の棚に入る（番号の形・丸�
   $('s-bank').value = '伊予銀行 見本支店 普通 1234567';
   $('b-set-save').click();
   await sleep(40);
+  /* お振込先は 自社情報の「保存」で しまう（2026-10-25 ⑤⑥＝テンプレートの 保存は 見えていない 区分を しまわない） */
+  $('b-bank-save').click();
+  await sleep(40);
   const org = db.pay_org[0].data;
   eq(org.numbering.invoice.format, 'y-seq');
   eq(org.taxRounding, 'round');
@@ -1871,7 +1893,8 @@ T('9-a. ★非課税と対象外は別物＝選び所に両方ある（新しい
   ok(opts.includes('非課税'), '「非課税」が無い: ' + opts.join('/'));
   ok(opts.includes('対象外'), '「対象外」が無い: ' + opts.join('/'));
   // ★増えたのは選択肢だけ＝行に入力は1つも増えていない（列の数は前の検査で変わり得るので数えない）
-  const cols = win.SeikyuApp._state.cur.data.cols;
+  /* ★紙の列は colsOf が その場で 決める★（2026-10-24 から 新しい1通に 列を 写さない）＝同じ物を 聞く */
+  const cols = win.SeikyuApp._colsForTest();
   const C = require_(path.join(ROOT, 'seikyu/lib/seikyu-cols.js'));
   /* ＋並べ替えの列 ＋消す列（どちらも「打つ所」ではない）
      ＋★紙に税率の列が無い時だけ、入力にだけ税率を出す★
@@ -3065,7 +3088,8 @@ await TA('15-c2. ★長い 口座で 振込先が 紙の 上で 行を 増やす
   const mae = db.pay_org[0].data.bank;
   const setBank = async (b) => {
     doc.querySelector('.bn[data-scr="scr-set"]').click(); await sleep(20);
-    $('s-bank').value = b; $('b-set-save').click(); await sleep(60);
+    /* お振込先は 自社情報の「保存」で しまう（2026-10-25 ⑤⑥＝テンプレートの 保存は お振込先を しまわない） */
+    $('s-bank').value = b; $('b-bank-save').click(); await sleep(60);
     doc.querySelector('.bn[data-scr="scr-edit"]').click(); await sleep(40);
     setLine(0, 'amount', '1001'); await sleep(140);   /* 打ち直して 数え直させる */
   };

@@ -299,6 +299,51 @@
             return suite.partners.upsert({ id: id, sort: cur.sort, data: data });
           });
         },
+        /* ★取引先を 消す★（司さん 2026-10-23 ⑤「取引先を削除できるようにしろ」）
+           ＝共有層（js/suite-data.js の partners.remove）を ★呼ぶだけ★＝行は 消さず deleted_at を 立てる（論理削除）。
+           ★出した請求書・下書きは 1通も 触らない★（pay_invoices は そのまま＝partner_id も 写しも 残る）。 */
+        remove: function (id) {
+          if (!suite || !suite.partners || typeof suite.partners.remove !== 'function') {
+            return Promise.resolve({ ok: false, reason: '共有データ層がありません' });
+          }
+          if (!id) return Promise.resolve({ ok: false, reason: 'この取引先が見つかりません' });
+          return Promise.resolve(suite.partners.remove(id)).then(function (r) {
+            if (!r || !r.ok) return { ok: false, reason: (r && r.reason) || '保存できませんでした' };
+            /* ★本当に 書けたかを 読み直す★（taiketsu 10-23 止2）
+               共有層の remove は update().eq('id') が ★0行でも エラーが 無ければ ok★を 返す
+               （見えない 行・別の 端末で 先に 消えた 等）。共有層は 変えずに ここで 確かめる。 */
+            return Promise.resolve(sb.from('pay_partners').select('id,deleted_at').eq('id', id).maybeSingle()).then(function (q) {
+              if (q && q.error) return { ok: false, reason: err(q.error) };
+              if (!q || !q.data || !q.data.deleted_at) return { ok: false, reason: '消せたか 確かめられませんでした。もう一度 お試しください' };
+              return { ok: true };
+            });
+          }).catch(function (e) { return { ok: false, reason: err(e) }; });
+        },
+        /* ★前に 消した 取引先を 戻す★（同じ 名前で 足す時に「混ぜる」を 選んだ時・手本＝代行請求書 mazeruKaKiku）
+           ＝共有層の upsert を 呼ぶだけ（deleted_at を 外す・中身は 前の まま）。★同じ id★＝前の 請求書・繰越が 続く。 */
+        revive: function (id) {
+          if (!suite) return Promise.resolve({ ok: false, reason: '共有データ層がありません' });
+          return Promise.resolve(sb.from('pay_partners').select('id,sort,data,deleted_at').eq('id', id).maybeSingle()).then(function (q) {
+            if (q && q.error) return { ok: false, reason: err(q.error) };
+            var row = q && q.data;
+            if (!row) return { ok: false, reason: 'この取引先が見つかりません' };
+            return Promise.resolve(suite.partners.upsert({ id: id, sort: row.sort, data: row.data || {} })).then(function (w) {
+              return (w && w.ok) ? { ok: true, id: id } : { ok: false, reason: (w && w.reason) || '保存できませんでした' };
+            });
+          }).catch(function (e) { return { ok: false, reason: err(e) }; });
+        },
+        /* ★消した 取引先の 名前★（読むだけ）＝消した 相手の 下書きが 一覧・紙で
+           「（消えた取引先）」「（取引先が未選択）」に ならない為。共有層の list は 消した 物を 返さないので ここで 読む。
+           ★読めない時は null★（0件の [] と 作り分ける・taiketsu 10-23 止A②）＝画面は 名前を 引けないだけ・
+             同じ 名前で 足す 時は「確かめられない」で 止める。行は 自分の 物だけ（倉庫の RLS）。 */
+        gone: function () {
+          return fetchAllQ(function (a, b) {
+            return sb.from('pay_partners').select('id,data,deleted_at', { count: 'exact' }).order('id', { ascending: true }).range(a, b);
+          }).then(function (r) {
+            if (!r || r.error) return null;
+            return (r.data || []).filter(function (x) { return x && x.deleted_at; });
+          }).catch(function () { return null; });
+        },
       },
     };
     return api;

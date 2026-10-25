@@ -38,6 +38,8 @@
        ★領収書はここに入らない★＝doc_type ではなく、入金1行から出す紙。 */
     docType: 'invoice',
     dirty: false,
+    /* ★消した 取引先★（id → 行）＝名前を 引く 為だけ（新しい 請求書の 相手には 出さない・2026-10-23 ⑤） */
+    gonePartners: {},
   };
 
   function $(id) { return document.getElementById(id); }
@@ -125,8 +127,10 @@
        （2026-08-31 実際にそうなった＝請求/集計を足した日） */
     /* ★scr-look は 画面では なくなった★（2026-09-10 かぶせに した＝代行請求と 同じ） */
     /* ★2026-09-10 「請求/集計」を 外した★（司さん「同じことが できるなら いらんことないか？」）
-       ＝一覧の 一部だった（集計の 計算・絞り込み・出す ボタンが 二重）。 */
-    ['scr-list', 'scr-edit', 'scr-set'].forEach(function (s) {
+       ＝一覧の 一部だった（集計の 計算・絞り込み・出す ボタンが 二重）。
+       ★2026-10-23 戻した★（司さん「請求／集計のページを作って、代行請求書と全く同じ作りでやって」）
+       ＝今度は ★計算も 紙も 2つ目を 作らない★（集計は renderReport 1本・紙は PAPER.build 1本）。 */
+    ['scr-list', 'scr-edit', 'scr-set', 'scr-bill'].forEach(function (s) {
       var el = $(s); if (el) el.classList.toggle('active', s === id);
     });
     /* ★紙を 見る 物は かぶせ★（2026-09-10）＝画面は 変わらないので
@@ -137,6 +141,16 @@
     Array.prototype.forEach.call(document.querySelectorAll('.bn'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-scr') === hikaru);
     });
+    /* ★開いたら すぐ 描く★（代行請求の showScreen('billing') と 同じ＝選ぶ前から 紙が 出ている）
+       ★かぶせを 閉じた 後で 描く★＝「確認」で 入れ替えた 1通が 戻ってから 紙を 作る */
+    if (id === 'scr-bill') {
+      /* ★入る たびに 紙を 作り直す★（設定で 自社の情報や 様式を 変えて 戻った 時に 古い 紙を 見せない） */
+      billKey = '';
+      /* ★一覧が 見積を 見ている 時・読めていない 時は 請求書の 棚を 別に 読む★（taiketsu 10-24 止1） */
+      if (!(S.listKind === 'invoice' && S.listReadOk === true)) loadBillInv();
+      try { renderBill(); renderReport(); }
+      catch (e) { box('bk-err', '請求書の画面が 描けませんでした（' + (e && e.message) + '）。'); }
+    }
     try { global.scrollTo(0, 0); } catch (e) { /* 端末によっては動かないが害はない */ }
   }
 
@@ -151,6 +165,10 @@
       rounding: (['floor', 'ceil', 'round'].indexOf(d.taxRounding) >= 0) ? d.taxRounding : 'floor',
       bank: d.bank || '',
       carry: !!d.invoiceCarry,      // ★繰越を紙に出すか（既定は切＝今までどおり）
+      /* ★取り消した請求書に残った入金を ほかの請求書に 充てるか★（司さん 2026-10-24「選べるようにしろ」・既定は 充てる）
+         充てる＝返金を 記録するまで 相手の 貸し（出し直しても 二重に 請求しない）／充てない＝無かった 事に する
+         （一覧の 入金の 状態と 繰越の 両方に 効く＝繰越を 使わない 会社にも 効く） */
+      voidPay: d.invoiceVoidPay === 'ignore' ? 'ignore' : 'count',
       template: TPL.get(d.invoiceTemplate) ? d.invoiceTemplate : TPL.DEFAULT_ID,
       cols: (d.invoiceCols && Array.isArray(d.invoiceCols.items) && d.invoiceCols.items.length) ? d.invoiceCols : null,
       /* ★紙の枠の行数（空＝既定。既定の数は紙の側が持っている）★
@@ -185,13 +203,59 @@
     if (v.id && v.status && v.status !== 'draft') {
       return COLS.normalizeSpec(TPL.getOrDefault(v.template_id).cols);
     }
+    /* ★★列は その紙の 様式に 合わせる★★（2026-10-23 司さん（客の実画面）
+         「設定で『項目と金額だけ＋控除』を選んでいるのに 一覧から確認したら 備考が入っている」）
+       ★直す前の作り★ … 下書きを 作った時に 会社の列を data.cols へ 写し、それを いちばん先に 見ていた。
+         そのあと 設定で 様式を 変えると 様式（template_id）は tplSync で 変わるのに
+         ★列だけ 作った時の 様式の まま★（genba の 6列）＝紙は「控除の様式なのに 備考の列」。
+         取引先ごとの様式・前回の様式でも 同じで、★会社の列(s.cols)は 会社の様式の 列★なのに
+         別の様式の 紙にも 当てていた。
+       ⇒ ★列は「どの様式の為の列か」を 持たせ、今の様式と 合う時だけ 使う★
+         ① その1通の列（data.cols）… data.colsTpl が 今の様式と 同じ時だけ
+         ② この相手だけの列（設定 ▸ 取引先 で 作った物）… その列が 今の様式の 為の物の時だけ（ptColsAu）
+         ③ 会社の列（設定 ▸ 明細の列）… 会社の様式と 今の様式が 同じ時だけ
+         ④ 今の様式の 列
+       ★発行済みは 上で 写しのまま 返している★（出した紙は 変えない）。お金は 列と 関係ない。 */
+    var tpl = v.template_id || templateForPartner(v.partner_id);
     var own = v.data && v.data.cols;
-    if (own && Array.isArray(own.items) && own.items.length) return COLS.normalizeSpec(own);
+    if (own && Array.isArray(own.items) && own.items.length
+      && colsAuMono(v.data.colsTpl, tpl)) return COLS.normalizeSpec(own);
     /* ★この相手だけの列★（会社の既定より 強い・無ければ 素通り＝今までどおり） */
-    var pc = SCOPE && SCOPE.partnerPaper(partnerById(v.partner_id)).cols;
-    if (pc && Array.isArray(pc.items) && pc.items.length) return COLS.normalizeSpec(pc);
-    if (s.cols) return COLS.normalizeSpec(s.cols);
-    return COLS.normalizeSpec(TPL.getOrDefault(v.template_id || s.template).cols);
+    var pPaper = SCOPE ? SCOPE.partnerPaper(partnerById(v.partner_id)) : {};
+    var pc = pPaper.cols;
+    if (pc && Array.isArray(pc.items) && pc.items.length && ptColsAu(pPaper, tpl)) return COLS.normalizeSpec(pc);
+    if (s.cols && colsAuMono(s.template, tpl)) return COLS.normalizeSpec(s.cols);
+    return COLS.normalizeSpec(TPL.getOrDefault(tpl).cols);
+  }
+  /** ★その列が 今の様式の 為の物か★（違う様式の 列を 紙に 当てない＝tpl-kiku-ui が 見張る） */
+  function colsAuMono(colsTpl, tpl) {
+    return !!colsTpl && colsTpl === tpl;
+  }
+  /** ★この相手だけの列は どの様式の 為の物か★（2026-10-24 taiketsu 止2）
+   *  ＝様式を 見ずに 使うと「様式は 控除・列は 現場名つき」の 相手で ★控除の紙に 備考が 出る★。
+   *  ・印（paper.colsTpl）が 在れば それ
+   *  ・印の 無い 古い列 … ★並びで 判じる★：どれかの 様式の 初期列と 同じなら その様式。
+   *    手で 足し引きした 列なら、★初期列と いちばん 重なる 様式★（重なり＝共通の列 ÷ 合わせた列・同点は 全部）。
+   *    （例：std1 から 消費税を 消して 摘要を 足した列＝std1／genba に 現場名を 足した列＝genba）
+   *    1本も 重ならない 列は ★どの様式でも 使わない★（様式の 列で 出す）。 */
+  function ptColsTpls(paper) {
+    var pp = paper || {};
+    if (pp.colsTpl && TPL.get(pp.colsTpl)) return [pp.colsTpl];
+    var items = (pp.cols && pp.cols.items) || [];
+    if (!items.length) return [];
+    var best = 0, out = [];
+    Object.keys(TPL.TEMPLATES).forEach(function (id) {
+      var d = COLS.normalizeSpec(TPL.getOrDefault(id).cols).items;
+      var kyotsu = d.filter(function (k) { return items.indexOf(k) >= 0; }).length;
+      var awase = items.length + d.length - kyotsu;
+      var r = awase ? kyotsu / awase : 0;
+      if (r <= 0) return;
+      if (r > best + 1e-9) { best = r; out = [id]; } else if (Math.abs(r - best) <= 1e-9) out.push(id);
+    });
+    return out;
+  }
+  function ptColsAu(paper, tpl) {
+    return ptColsTpls(paper).indexOf(tpl) >= 0;
   }
   /** ★この相手の 紙の行数★（無ければ 会社の既定）。空欄と 0 は 別物 */
   function rowsForPartner(pid, orgRows) {
@@ -226,9 +290,40 @@
   /** ★この相手へ 前に 出した紙★（新しい順の 1通目）。無ければ null。 */
   function tplFromRireki(pid) {
     if (!pid) return null;
-    var ima = S.cur ? S.cur.id : null;
+    /* ★今 開いている 1通も 区別しない★（2026-10-24 taiketsu 止B）
+       ＝前は 開いている 1通（S.cur）を 外していたので、★開いている 紙に よって 設定の 行が 変わった★。
+         数えるのは 発行済みだけ＝開いている 下書きは もともと 数えない。同じ 材料なら 同じ 答え。 */
+    /* ★会社の設定で 様式を 選んだ 後は、それより 前に 出した紙の 様式を 当てない★
+       （2026-10-23 司さん「設定で 項目と金額だけ＋控除 を 選んでいるのに 備考が 入っている」）
+       ＝前に genba で 出した 相手だと、今 選んだ 様式より ★前回の 様式が 勝っていた★。
+       ★人が 今 選んだ物が いちばん 新しい 意思★。相手ごとに 変えたい時は 設定 ▸ 取引先 の「紙の様式」。 */
+    var org0 = S.org || {};
+    var erandaAt = String(org0.invoiceTemplateAt || '');
+    /* ★会社が 様式を 保存して いれば、選んだ 時刻が 無くても 会社の 様式が 勝つ★（2026-10-24 taiketsu 止1）
+       ＝時刻を 持つ前に 控除の様式を 保存した 客が、前に genba で 出した 相手に 作ると
+         ★前回の genba が 勝って 備考の列が 出た★。前回が 勝つのは「選んだ 時刻より 後に 出した紙」だけ。
+       ★設定を 1度も 保存して いない 会社だけ★ 前回を 当てる（今までの 当て方を 残す）。
+       （設定の 保存は 何を 保存しても 様式を 書く＝保存した 会社は「様式を 選んだ」と 同じに 扱う） */
+    var kaishaEranda = !!(org0.invoiceTemplate && TPL.get(org0.invoiceTemplate));
+    if (kaishaEranda && !erandaAt) return null;
+    /* ★「前回」に 数えるのは ★発行した 請求書★ だけ★（2026-10-24 taiketsu 止A）
+       ＝下書きは 保存した 日時で 比べていたので、取引先だけ genba に して 下書きを 保存 →
+         その取引先を 会社の既定に 戻す と、★残った 下書きが「前回」として 勝ち★
+         設定は「会社の既定」と 出るのに 新しい1通は genba・備考の列 だった。
+         下書き・取り消し済み・見積は 出した紙では ない。比べるのは 発行した 時刻（issued_at）。 */
+    /* ★相手の 様式を 付けた・外した 時刻（paper.templateAt）も 同じに 扱う★（2026-10-24 taiketsu 止B）
+       ＝相手だけ genba で 発行 → 相手を「会社の既定のまま」に 戻す と、外した 時刻が どこにも 無く
+         ★その 発行済みが「前回」として 勝ち★ 設定の 行（控除／会社の既定）と 紙（genba）が 食い違った。
+       ⇒ 会社の 時刻と 相手の 時刻の ★新しい方より 後に 発行した 紙だけ★を 前回に 数える。 */
+    var ptAt = String(((SCOPE ? SCOPE.partnerPaper(partnerById(pid)) : {}).templateAt) || '');
+    var kijun = (ptAt > erandaAt) ? ptAt : erandaAt;
+    /* ★種類は 今の 一覧の 種類と 比べる★（2026-10-24 taiketsu 止C）＝見積は 見積の 前回、請求書は 請求書の 前回。
+       （前は 'invoice' と 決め打ちで、見積書の 画面では 前回の 様式が まったく 効かなかった） */
+    var shurui = S.docType || 'invoice';
     var mine = (S.invoices || []).filter(function (x) {
-      return x.partner_id === pid && x.id !== ima && x.template_id && TPL.get(x.template_id);
+      if (!(x.partner_id === pid && x.template_id && TPL.get(x.template_id))) return false;
+      if (x.status !== 'issued' || (x.doc_type || 'invoice') !== shurui) return false;
+      return !kijun || String(x.issued_at || '') > kijun;
     }).sort(function (a, b) { return String(b.issue_ymd || '').localeCompare(String(a.issue_ymd || '')); });
     if (!mine.length) return null;
     /* ★名前は 今 選んでいる相手から 取る★（古い1通から 引くと、その相手が 消えている時に
@@ -275,23 +370,251 @@
   }
 
   /* ═══ 取引先 ═══ */
+  /* ★消した 取引先も 名前は 引ける★（2026-10-23 ⑤）＝消した 相手の 下書き・前に 出した 紙が
+     「（消えた取引先）」「（取引先が未選択）」の 嘘の 字に ならない。
+     ★選べる 相手（S.partners）には 入れない★＝新しい 請求書の 相手・設定の 札には 出ない。
+     ★使い分け★（taiketsu 10-23 止1）＝ここは ★名前と 紙の 見た目を 引く 用★。
+       発行（issue・issueBlockReason）と 設定（札・質問）は ★生きている 相手だけ★の ptLive を 使う。 */
   function partnerById(id) {
     for (var i = 0; i < S.partners.length; i++) if (S.partners[i].id === id) return S.partners[i];
+    if (id && S.gonePartners && S.gonePartners[id]) return S.gonePartners[id];
     return null;
   }
   function partnerName(inv) {
     var byId = {};
+    Object.keys(S.gonePartners || {}).forEach(function (k) { byId[k] = S.gonePartners[k]; });
     S.partners.forEach(function (p) { byId[p.id] = p; });
     return DOC.partnerNameOf(inv, byId);
+  }
+
+  /* ═══ ★その1通で 払ってもらう額★（司さんの 決め「揃えろ」2026-10-24）═══
+     紙の「ご請求金額」＝DOC.payableOf(tax, carry, gensen, deduct)（seikyu-paper.js 1051/1084）。
+     一覧の 金額・一覧の 頭の 合計・入金の 状態・集計・集計の Excel・請求/集計の 合計は ★この 1つ★から 出す。
+       ・控除 … 引いた 後（倉庫の totals.grandTotal が もう 控除の 後）
+       ・源泉 … 引いた 後（相手は 源泉を 引いて 払う＝入金の 比べも この 額）。紙と 同じ currentGensen を 通す
+       ・繰越 … ★足さない★（前の 月の 残り＝前の 月で 数えている。足すと 二重に 数える）
+     ★倉庫の 値は 書き換えない★（読む 時に 数えるだけ）。控除・源泉・繰越の 無い 1通は 今までと 1円も 変わらない。
+     読めない 時は null（0円と 言わない）。 */
+  function gakuOf(v) {
+    var g = v && v.totals && v.totals.grandTotal;
+    if (typeof g !== 'number' || !Number.isFinite(g)) return null;
+    var keep = S.cur, gs = null;
+    try { S.cur = v; gs = currentGensen(); } catch (e) { gs = null; } finally { S.cur = keep; }
+    return DOC.payableOf({ grandTotal: g }, null, gs, null);
   }
 
   /* ═══ 一覧 ═══ */
   /** その1通の入金の状態。★数え方は seikyu-doc.js が唯一の正（画面で数え直さない）★
    *  S.receipts が null＝読めていない → paymentStateOf が 'unknown' を返す（0にしない）。 */
+  /* ═══ ★取引先ごとの 帳簿★（2026-10-24 指示役の 決め＝部分の 継ぎ足しを やめて 1つの 決まりに）═══
+     ★1つの 帳簿★＝取引先ごとに、発行済みの 請求書（取り消し・下書き・見積を 除く）を 請求日の 古い 順に 並べ、
+       各 1通の 額は gakuOf（源泉・控除の 後・繰越を 含まない 1通分）。入金は その 取引先の 入金 全部
+       （返金は マイナス・消した 入金は 除く。どの 紙に 記録したかは 問わない＝客が 9月の 紙に 記録しても 10月の 紙に 記録しても 同じ）。
+     ① 次の 紙の 繰越＝その 紙より 前に 出した 請求書の gakuOf の 合計 − その 取引先の 入金の 合計（carryFromLedger）
+     ② 入金の 状態＝入金を 古い 請求書から 順に 充てる（FIFO の 消込）。返金は 新しい 方から 戻す。余りは 一番 新しい 1通に（過入金）
+     ③ 一覧・入力の 入金の 箱・集計・集計の Excel・請求/集計・領収書は 全部 ここから 数える
+     ④ ★倉庫は 書き換えない★（読む 時に 数えるだけ）／★発行済みの 紙に 刻んだ 繰越（snapshot.carry）は 変えない★
+       ／集計の「請求」は 1通分（繰越を 二重に 数えない）
+     前の 作り（前回の 紙だけを 見る CARRY と、繰越を 含む 紙への 入金だけ 前へ 回す 充て方）は ★これで 置き換えた★
+       ＝前は 9月の 紙に 記録した 入金が 10月の 紙の 計算に 入らず 二重に 請求した（止1）・返金で 食い違った（止2）・
+         多く 払った 分が 次の 紙で 消えたのに 一覧は「一部入金」と 言った（止3）。 */
+  /** その 紙の ご請求金額（刷った 繰越 込み）＝領収書の「全額」の 判定だけが 使う（f013957 の 決め） */
+  function kamiGakuOf(v) {
+    var g = gakuOf(v);
+    if (g === null) return null;
+    var c = v && v.snapshot && v.snapshot.carry;
+    var k = (c && (c.state === 'ok' || c.state === 'over') && Number.isFinite(Number(c.carry))) ? Number(c.carry) : 0;
+    return g + k;
+  }
+  function choubo_jun(a, b) {
+    return String(a.issue_ymd || '').localeCompare(String(b.issue_ymd || '')) || String(a.no || '').localeCompare(String(b.no || ''));
+  }
+  var _cbKey = null, _cbVal = null;
+  var VOIDWARN = '取り消した請求書に入金や返金の記録が残っていて、同じ取引先の返金がどの入金を返した物か分からないため、入金と繰越を数えられません。設定の「取り消した請求書に残っている入金を、ほかの請求書に充てる」を入にするか、返金の記録を直してください。';
+  function choubo() {
+    var rs = S.receipts;
+    var src = billSrc();
+    var list = (src.ok === true) ? src.list : (S.invoices || []);
+    var voidPay = settings().voidPay;
+    var key = [rs, list, rs ? rs.length : -1, list.length, voidPay];
+    if (_cbKey && _cbKey[0] === key[0] && _cbKey[1] === key[1] && _cbKey[2] === key[2] && _cbKey[3] === key[3] && _cbKey[4] === key[4]) return _cbVal;
+    var invById = {}, parts = {}, byInv = {}, byRc = {}, warn = [];
+    var P = function (pid) { pid = String(pid || ''); return parts[pid] || (parts[pid] = { invs: [], rcs: [] }); };
+    list.forEach(function (v) {
+      if (!v || !v.id || (v.doc_type || 'invoice') !== 'invoice') return;
+      invById[v.id] = v;
+      if (v.status === 'issued') P(v.partner_id).invs.push(v);
+    });
+    (rs || []).forEach(function (r) {
+      if (!r || r.deleted_at) return;                                // 消した 入金は 数えない
+      var v = invById[r.invoice_id]; if (!v) return;                 // 別の 種類・知らない 紙の 入金は 数えない
+      if (v.status === 'void' && voidPay === 'ignore') {             // ★取り消した 紙の 入金を 充てない 設定★（司さん 10-24）
+        var pv = P(v.partner_id); pv.voidNet = pv.voidNet || {};
+        pv.voidNet[v.id] = (pv.voidNet[v.id] || 0) + (Number(r.amount) || 0);   // 紙ごとの 正味（その 紙の 上の 返金も 引く）
+        return;
+      }
+      P(v.partner_id).rcs.push(r);
+    });
+    var put = function (c, r, t) {
+      c.paid += t; c.alloc.push({ rc: r, amount: t });
+      (byRc[r.id] || (byRc[r.id] = [])).push({ inv: c.v, amount: t });
+    };
+    Object.keys(parts).forEach(function (pid) {
+      var p = parts[pid];
+      p.invs.sort(choubo_jun);
+      p.rcs.sort(function (x, y) { return String(x.ymd || '').localeCompare(String(y.ymd || '')) || String(x.created_at || '').localeCompare(String(y.created_at || '')); });
+      /* ★「充てない」で 数えられない 取引先は 止めて 警告★（司さん 10-25「止めて警告」）
+         取り消した 紙に 入金が 残り（正味 ＞ 0）、同じ 取引先の 生きている 紙に 返金（マイナスの 入金）が ある 時は、
+         その 返金が 取り消した 紙の 分か 分からない（返金に 紐付けが 無い）＝推測で 打ち消すと 多く 払った 分の 返金まで 食って
+         少なく 請求する（taiketsu 止A〜C）。その 取引先は 入金の 状態・繰越・集計を「未確認」に して 発行を 止める。 */
+      /* 取り消した 紙の 正味が マイナス（その 紙の 上で ほかの 紙の 分まで 返した）時も、何の 返金か 分からない＝止める（taiketsu 3回目 止1） */
+      var vn = p.voidNet || {};
+      p.voidWarn = Object.keys(vn).some(function (id) { return vn[id] < 0; })
+        || (Object.keys(vn).some(function (id) { return vn[id] > 0; }) && p.rcs.some(function (r) { return (Number(r.amount) || 0) < 0; }));
+      if (p.voidWarn) warn.push(pid);
+      p.cells = p.invs.map(function (v) { var g = gakuOf(v); return { v: v, gaku: (g === null ? 0 : g), paid: 0, alloc: [], credit: 0 }; });
+      p.cells.forEach(function (c) { byInv[c.v.id] = c; });
+      var cells = p.cells;
+      /* ★マイナスの 請求書（赤伝）は 貸し★＝入金より 先に、古い 請求書から 順に 差し引く（2026-10-24 taiketsu 止3）
+         前は 消込で 飛ばされ、紙と 集計は 払い終わりなのに 一覧だけ「一部入金」と 督促していた。
+         ★お金の 入金では ない★＝credit に 持ち、chouboReceipts（集計の 入金）には 入れない（集計の 請求は もう 差し引いた 額） */
+      /* 当てる 先＝★赤伝の 日 以前で 一番 新しい 正の 紙から 古い 方へ★、余れば 後の 紙へ（taiketsu 4回目 止A）
+         一番 古い 紙から 当てると、払い終わった 9月に 当たって 9月の 入金が 10月へ 押し出され、集計の 9月が「一部入金」に 割れた */
+      /* ★赤伝の 決まり（taiketsu 6回目で 1つに まとめ直した）★ 集計は 請求月ごとに 赤伝を その 月で 差し引く＝帳簿も 同じ 順で 当てる
+         ①入金より 先に ★同じ 月★の 正の 紙（新しい 方から）→ ★前の 月★の 正の 紙（新しい 方から）
+         ②返金（マイナスの 入金）は まず ★まだ 引き切れていない 赤伝★に 当てる（こちらが 返した お金＝その 赤伝は 済み）
+         ③入金を 全部 充てた 後に まだ 残る 赤伝は 後の 月の 紙へ（古い 方から）
+         ④それでも 残れば 赤伝の 紙に 残る＝残りが マイナス＝過入金（こちらが 返す 額）
+         前は「日付で 以前→後」を 入金より 先に 当てたので、月の 途中の 返品の 赤伝が 払い終わった 9月に 当たって 集計が 割れ（止A）、
+         返金した 赤伝が 後の 10月の 紙を「一部入金」に した（止C）。 */
+      var tsuki = function (c) { return String(c.v.issue_ymd || '').slice(0, 7); };
+      var ate = function (n, m) {
+        if (n.left <= 0 || m === n || m.gaku <= 0) return;
+        var sp = m.gaku - m.credit - m.paid; if (sp <= 0) return;
+        var u = Math.min(sp, n.left); m.credit += u; n.credit -= u; n.left -= u;
+      };
+      var reds = cells.filter(function (n) { return n.gaku < 0; });
+      reds.forEach(function (n) { n.left = -n.gaku; });
+      reds.forEach(function (n) {
+        var ym = tsuki(n), j;
+        for (j = cells.length - 1; j >= 0; j--) { if (tsuki(cells[j]) === ym) ate(n, cells[j]); }
+        for (j = cells.length - 1; j >= 0; j--) { if (tsuki(cells[j]) < ym) ate(n, cells[j]); }
+      });
+      p.rcs.forEach(function (r) {
+        var amt = Number(r.amount) || 0;
+        if (!cells.length || !amt) return;
+        var i, c, t;
+        if (amt > 0) {                                               /* ★古い 請求書から 順に 充てる★ */
+          for (i = 0; i < cells.length && amt > 0; i++) {
+            c = cells[i]; var room = c.gaku - c.credit - c.paid; if (room <= 0) continue;
+            t = Math.min(room, amt); put(c, r, t); amt -= t;
+          }
+          if (amt > 0) put(cells[cells.length - 1], r, amt);        /* 余りは 一番 新しい 1通（過入金） */
+        } else {                                                     /* ★返金は まだ 引き切れていない 赤伝 → 新しい 方から 戻す★ */
+          var back = -amt;
+          for (i = 0; i < reds.length && back > 0; i++) {
+            c = reds[i]; var owe = c.left + c.paid; if (owe <= 0) continue;   // 赤伝の まだ 返していない 額（paid は 返金で マイナス）
+            t = Math.min(owe, back); put(c, r, -t); back -= t;
+          }
+          for (i = cells.length - 1; i >= 0 && back > 0; i--) {
+            c = cells[i]; if (c.paid <= 0) continue;
+            t = Math.min(c.paid, back); put(c, r, -t); back -= t;
+          }
+          if (back > 0) put(cells[cells.length - 1], r, -back);
+        }
+      });
+      /* ③ まだ 残る（返金も されていない）赤伝は 後の 月の 紙へ（古い 方から） */
+      reds.forEach(function (n) {
+        var rest = n.left + n.paid; if (rest <= 0) return;            // 返金で 済んだ 分は 当てない
+        var keep = n.left; n.left = rest;
+        var ym = tsuki(n);
+        for (var j = 0; j < cells.length; j++) { if (tsuki(cells[j]) > ym) ate(n, cells[j]); }
+        n.left = keep - (rest - n.left);
+      });
+    });
+    _cbKey = key; _cbVal = { ok: rs !== null && rs !== undefined, parts: parts, byInv: byInv, byRc: byRc, invById: invById, warn: warn };
+    return _cbVal;
+  }
+  /** ★帳簿で 充てた 入金★を 1通ごとの 行に した 写し（集計の REP.summarize に 渡す）。読めない 時は null */
+  function chouboReceipts() {
+    var L = choubo();
+    if (!L.ok || L.warn.length) return null;   // 数えられない 取引先が ある 時は 集計の 入金も「未確認」（0円と 言わない）
+    var out = [];
+    Object.keys(L.byInv).forEach(function (id) {
+      L.byInv[id].alloc.forEach(function (a) { out.push({ invoice_id: id, amount: a.amount, ymd: a.rc.ymd || '' }); });
+    });
+    return out;
+  }
   function payStateOf(inv) {
-    return DOC.paymentStateOf(
-      { id: inv.id, grand_total: (inv.totals && inv.totals.grandTotal) || 0 },
-      S.receipts === null ? null : S.receipts);
+    var g = gakuOf(inv) || 0;            /* ★払ってもらう 額（源泉の 後）と 比べる★ */
+    var L = choubo();
+    if (!L.ok) return DOC.paymentStateOf({ id: inv.id, grand_total: g }, null);
+    if (inv && L.parts[String(inv.partner_id || '')] && L.parts[String(inv.partner_id || '')].voidWarn) {
+      var sw = DOC.paymentStateOf({ id: inv.id, grand_total: g }, null); sw.voidWarn = true; return sw;   // 止めて 警告（未確認）
+    }
+    var c = inv && L.byInv[inv.id];
+    if (!c) return DOC.paymentStateOf({ id: inv.id, grand_total: g }, S.receipts);   // 下書き・取り消し（帳簿の 外）
+    /* 状態の 決め方は DOC.paymentStateOf 1本（充てた 分を その 1通の 入金として 渡す） */
+    var st = DOC.paymentStateOf({ id: inv.id, grand_total: g },
+      c.alloc.map(function (a) { return { invoice_id: inv.id, amount: a.amount, ymd: a.rc.ymd || '' }; }));
+    /* 赤伝で 差し引いた 分は ★入金に 混ぜない★（「充てた入金」の 額は お金だけ）＝残りと 状態だけに 効かせる */
+    st.credit = c.credit;
+    if (c.credit) {
+      st.remain = st.total - st.paid - c.credit;
+      /* ★状態は 残りの 符号で 決める★（入金と 貸しが 打ち消して 0 でも、残りが マイナスなら 過入金＝返す 額が ある・taiketsu 4回目 止B） */
+      /* 入金 0 で 赤伝だけ 当たった 紙は「未入金」（1円も 入っていない＝集計と 同じ 言葉・taiketsu 7回目 止3） */
+      st.state = st.remain < 0 ? 'over' : st.remain === 0 ? 'paid' : (st.paid === 0 ? 'unpaid' : 'partial');
+    }
+    /* ★引ける 紙が 無い 赤伝★も 残りが マイナス＝こちらが 返す 額が ある＝過入金（「未入金」と 言わない・taiketsu 5回目 止2） */
+    if (st.remain < 0) st.state = 'over';
+    st.alloc = c.alloc;
+    return st;
+  }
+  /** ★次の 紙の 繰越★＝その 紙より 前に 出した 請求書の gakuOf の 合計 − その 取引先の 入金の 合計
+   *  紙に 刷る 形（CARRY と 同じ 形）に して 返す：
+   *    前回請求額＝前回の 紙の 時点で 残っていた 額（前回までの gakuOf − 前回の 紙の 日より 前の 入金）
+   *    ご入金額 ＝前回の 紙の 日 以後の 入金 ／ 繰越＝前回請求額 − ご入金額（＝①の 式と 同じ 数） */
+  function carryFromLedger(v, thisTotal) {
+    var src = billSrc();
+    var list = (src.ok === true) ? src.list : (S.invoices || []);
+    var pid = String(v.partner_id || '');
+    /* ★日付で 切らない★＝この 紙 以外の 発行済み 全部（2026-10-24 taiketsu 止2）
+       前は この 紙より 後の 日付の 請求書と その 入金を 外していた＝請求日を 前に さかのぼった 紙（請求漏れ）で、
+       もう 払ってもらった 額を もう一度 請求し（9/30 付けで 11,000 の 所 44,000）、一覧の「入金済」と 食い違った。
+       取引先の 残り（帳簿の 消込と 同じ 数）を そのまま 繰り越す。 */
+    var mae = list.filter(function (x) {
+      return x && x.id !== v.id && (x.doc_type || 'invoice') === 'invoice' && x.status === 'issued'
+        && String(x.partner_id || '') === pid;
+    }).sort(choubo_jun);
+    if (!mae.length) {
+      return { state: 'first', prevNo: '', prevTotal: null, paid: null, carry: null,
+        thisTotal: thisTotal, grandTotal: thisTotal, label: CARRY.STATE_LABEL.first };
+    }
+    var prev = mae[mae.length - 1];
+    if (S.receipts === null || S.receipts === undefined) {
+      return { state: 'unknown', prevNo: prev.no || '', prevTotal: null, paid: null, carry: null,
+        thisTotal: thisTotal, grandTotal: null, label: CARRY.STATE_LABEL.unknown };
+    }
+    var L = choubo();
+    if (L.parts[pid] && L.parts[pid].voidWarn) {                   // ★止めて 警告★（司さん 10-25）
+      return { state: 'unknown', prevNo: prev.no || '', prevTotal: null, paid: null, carry: null,
+        thisTotal: thisTotal, grandTotal: null, label: CARRY.STATE_LABEL.unknown, voidWarn: true, why: VOIDWARN };
+    }
+    var ids = {}, sumG = 0;
+    mae.forEach(function (x) { ids[x.id] = 1; sumG += (gakuOf(x) || 0); });
+    var before = 0, since = 0;
+    /* その 取引先の 入金（この 紙 自身に 記録した 物だけ 除く） */
+    var p = L.parts[pid] || { rcs: [] };
+    p.rcs.forEach(function (r) {
+      var on = L.invById[r.invoice_id];
+      if (!on || on.id === v.id) return;
+      var amt = Number(r.amount) || 0;
+      if (r.ymd && prev.issue_ymd && r.ymd < prev.issue_ymd) before += amt; else since += amt;
+    });
+    var prevTotal = sumG - before;
+    var carry = prevTotal - since;
+    return { state: carry < 0 ? 'over' : 'ok', prevNo: prev.no || '', prevTotal: prevTotal, paid: since, carry: carry,
+      thisTotal: thisTotal, grandTotal: carry + thisTotal, label: carry < 0 ? CARRY.STATE_LABEL.over : '' };
   }
   function payLabel(inv) {
     // ★発行していない紙に「未入金」と書かない★（まだ請求していない＝入金の話が無い）
@@ -327,66 +650,496 @@
   /* ═══ ★集計★（司さん 2026-08-30「競合が当たり前にしてる事は こちらも当たり前に」）═══
      ・数え方は seikyu-report.js（その中も seikyu-doc.paymentStateOf を呼ぶ）＝★ここでは1つも数え直さない★
      ・★入金が読めていない時は「未確認」と書く★（0円と書かない）
-     ・★見積の時は 集計を出さない★（見積は 請求ではない） */
+     ・★集計は 請求書だけ★（見積は 請求ではない）
+     ★2026-10-23 置き場を「請求/集計」の 画面へ 移した★（司さん「代行請求書と全く同じ作りでやって」）
+       ＝見せ方は 代行請求の renderReport（daikou-seikyu.html:12608）と 同じ
+         ・上に 請求／入金／残額 の 3つの 枠
+         ・取引先ごとの 表（取引先〔状態の札〕｜請求｜入金｜残り・請求の 大きい順＝REP の 並び そのまま）
+         ・一番 下に「合計（N社・M件）」
+       ★数は REP.summarize の 返した物を そのまま 書くだけ★（1円も 足し直さない）。 */
   var repMonth = null;                       // null＝まだ人が選んでいない（＝いちばん新しい月）
 
-  function reportOf(month) {
+  function reportOf(month, kind, list) {
     var REP = global.SeikyuReport;
     if (!REP) return null;
-    return REP.summarize({ invoices: S.invoices || [], receipts: S.receipts,
-      partners: S.partners || [], month: month, kind: S.kind || 'invoice', doc: DOC });
+    /* ★集計の「請求」は 紙の ご請求金額の まま（司さんの「揃えろ」）★、帳簿で 赤伝を 差し引いた 分は creditOf で 別に 渡す
+       （taiketsu 7回目 止1＝月を またぐ 赤伝でも 月の 行の 残り＝一覧の 残り）。入金が 読めない 時は 0（今までどおり）。 */
+    var L = choubo();
+    var creditOf = function (v) { var c = L.ok ? L.byInv[v.id] : null; return c ? c.credit : 0; };
+    return REP.summarize({ amountOf: gakuOf, creditOf: creditOf, invoices: list || S.invoices || [], receipts: chouboReceipts(),
+      partners: S.partners || [], month: month, kind: kind || S.kind || 'invoice', doc: DOC });
   }
+  function ymLabel(m) { return m ? (m.slice(0, 4) + '年' + Number(m.slice(5, 7)) + '月') : ''; }
   function renderReport() {
-    /* ★2026-09-10 集計は 一覧の 頭に 出しっぱなし★（引き出し rep-box は 外した）
-       ＝出し入れするのは ★合計の1行・月の欄・取引先の表★の 3つ。 */
-    var REP = global.SeikyuReport, sumEl = $('rep-sum');
-    var mrow = $('rep-month') && $('rep-month').parentElement, body = $('rep-body');
-    if (!sumEl || !body || !REP) return;
-    var isInv = (S.kind || 'invoice') === 'invoice';
-    show(sumEl, isInv); show(body, isInv);
-    if (mrow) show(mrow, isInv);
-    if (!isInv) return;
-
-    var months = REP.monthsOf((S.invoices || []).filter(function (v) {
+    var REP = global.SeikyuReport;
+    /* ★集計は「請求/集計」の 画面 1か所だけ★（一覧の 頭の 集計は ① 一覧の 席が 外した＝2か所で 同じ数を 出さない）
+       ★描くのは 画面に 入った時と 月・切り替えを 押した時★（goScreen／billSegShow／bk-rep-month） */
+    var sumEl = $('bk-rep-sum'), body = $('bk-rep-body'), sel = $('bk-rep-month');
+    if (!sumEl || !body || !sel || !REP) return;
+    var src = billSrc();
+    if (src.ok !== true) {
+      /* ★読めていない 間は「まだ 発行していない」と 言わない★（嘘に なる・taiketsu 10-24 止1） */
+      sel.innerHTML = '<option value="">―</option>'; sumEl.innerHTML = '';
+      show($('bk-rep-acts'), false);
+      body.innerHTML = '<div class="empty">' + esc(billYomenai(src.ok)) + '</div>';
+      return;
+    }
+    var months = REP.monthsOf(src.list.filter(function (v) {
       return (v.doc_type || 'invoice') === 'invoice' && v.status === 'issued';
     }));
-    var sel = $('rep-month');
-    if (repMonth === null || (repMonth && months.indexOf(repMonth) < 0)) repMonth = months[0] || '';
+    /* ★1通も 無い 間は 決めない★（null の まま）＝前は 空（ぜんぶ）に 固まり、初めて 発行した後も 最新の月に ならなかった */
+    if (repMonth === null || (repMonth && months.indexOf(repMonth) < 0)) repMonth = months.length ? months[0] : null;
     sel.innerHTML = '<option value="">ぜんぶ</option>'
       + months.map(function (m) {
         return '<option value="' + esc(m) + '"' + (m === repMonth ? ' selected' : '') + '>'
-          + esc(m.slice(0, 4) + '年' + String(Number(m.slice(5, 7))) + '月') + '</option>';
+          + esc(ymLabel(m)) + '</option>';
       }).join('');
-    sel.value = repMonth;
+    sel.value = repMonth || '';
 
-    var s2 = reportOf(repMonth);
-    var lb = repMonth ? (repMonth.slice(0, 4) + '年' + Number(repMonth.slice(5, 7)) + '月') : 'ぜんぶ';
+    var s2 = reportOf(repMonth || '', 'invoice', src.list);
+    var lb = repMonth ? ymLabel(repMonth) : 'ぜんぶ';
     var unk = (s2.totals.paid === null);
+    /* ★「この月の集計だけExcelに」は 表が 在る時だけ★（手本 renderReport の repActions と 同じ） */
+    show($('bk-rep-acts'), !!s2.seen);
+    /* ★読めるように なったら「入金が 読めていない」の 古い 知らせを 残さない★（絵で 見つけた・2026-10-23） */
+    if (!unk) box('bk-rep-err', '');
     if (!s2.seen) {
-      sumEl.innerHTML = '<span class="rep-c">' + esc(lb) + ' … 出した請求書は まだありません</span>';
-      $('rep-body').innerHTML = '<p class="hint">この月に 発行した請求書がありません。'
-        + '（下書きと 取り消した紙は 数えません）</p>';
+      sumEl.innerHTML = '';
+      body.innerHTML = '<div class="empty">' + (months.length ? esc(lb) + 'に 発行した請求書は ありません。' : 'まだ 発行した請求書が ありません。')
+        + '（下書きと 取り消した紙は 数えません）</div>';
       return;
     }
-    var cell = function (t, v) { return '<span class="rep-c"><span class="rep-l">' + t
-      + '</span><span class="rep-v">' + v + '</span></span>'; };
-    sumEl.innerHTML = '<span class="rep-c"><span class="rep-l">' + esc(lb) + '</span>'
-      + '<span class="rep-v">' + s2.totals.count + '通</span></span>'
-      + cell('請求', yen(s2.totals.total) + ' 円')
-      + cell('入金', unk ? '（未確認）' : yen(s2.totals.paid) + ' 円')
-      + cell('残り', unk ? '（未確認）' : yen(s2.totals.remain) + ' 円');
+    /* ★大きい 金額でも 字を 切らない★（taiketsu 10-24 止3＝320px で 2,689,132円 が「2,689,1…」）
+       ＝桁区切りの 後ろで だけ 折れる 様に する（数字の 途中では 割らない）。数は yen() の まま 1円も 変えない */
+    var yenW = function (n) { return esc(yen(n)).replace(/,/g, ',<wbr>'); };
+    var en = function (n) { return unk ? '未確認' : yenW(n) + '円'; };
+    var cell = function (cls, t, v) {
+      return '<div class="bk-sum-c' + cls + '"><span class="bk-sum-l">' + t + '</span>'
+        + '<span class="bk-sum-v">' + v + '</span></div>';
+    };
+    var t = s2.totals;
+    /* 赤伝の 差し引きが ある 時は 枠も 4つ＝請求 ＋ 差し引き − 入金 ＝ 残額 が 足し算で 合う（taiketsu 8回目 止2） */
+    var sashiT = s2.rows.some(function (r) { return r.credit; });
+    sumEl.innerHTML = cell('', '請求', yenW(t.total) + '円')
+      + (sashiT ? cell('', '赤伝で差し引き', unk ? '未確認' : yenW(-t.credit) + '円') : '')
+      + cell('', '入金', en(t.paid))
+      + cell(' rem', '残額', en(t.remain));
+    var num = function (n, rem) {
+      if (n === null || n === undefined) return '<td class="bk-n">未確認</td>';
+      return '<td class="bk-n' + (rem && n > 0 ? ' bk-rem' : '') + '">' + yenW(n) + '</td>';
+    };
+    /* ★赤伝の 差し引きが ある 時だけ 列を 出す★（無い 会社の 表は 今までどおり 3列） */
+    var sashi = s2.rows.some(function (r) { return r.credit; });
+    var sc = function (n) { return sashi ? num(n === null || n === undefined ? n : -n) : ''; };
+    body.innerHTML = '<table class="bk-tbl"><thead><tr><th>取引先</th><th>請求</th>' + (sashi ? '<th>赤伝で差し引き</th>' : '') + '<th>入金</th><th>残り</th></tr></thead><tbody>'
+      + s2.rows.map(function (r) {
+        var tag = unk ? '' : '<span class="tag ' + (r.state === 'paid' ? 'tag-on'
+          : r.state === 'unpaid' ? 'tag-off' : 'tag-mute') + '">'
+          + esc(DOC.PAY_STATE_LABEL[r.state] || '') + '</span>';
+        return '<tr data-pid="' + esc(r.partnerId) + '"><td class="bk-co">' + tag
+          + '<span class="bk-co-n">' + esc(r.name) + '</span></td>'
+          + num(r.total) + sc(r.credit) + num(r.paid) + num(r.remain, true) + '</tr>';
+      }).join('')
+      + '</tbody><tfoot><tr><td>合計（' + s2.rows.length + '社・' + t.count + '件）</td>'
+      + num(t.total) + sc(t.credit) + num(t.paid) + num(t.remain, true) + '</tr></tfoot></table>'
+      + (sashi ? '<p class="hint">「赤伝で差し引き」は、マイナスの請求書（赤伝）をほかの月の請求書から差し引いた額です。差し引かれた月はマイナス、赤伝の月はほかの月へ回した分がプラスで出ます（残り＝請求 ＋ 赤伝で差し引き − 入金）。</p>' : '')
+      + '<p class="hint">金額は 円（税込）。' + esc(lb) + 'に 発行した請求書だけを 数えています（下書きと 取り消した紙は 数えません）。</p>'
+      + repNote(src.list, repMonth || '')
+      + (unk ? '<p class="hint">' + (choubo().warn.length
+        ? esc(VOIDWARN + '（' + choubo().warn.map(function (id) { var pp = partnerById(id); return (pp && pp.data && pp.data.name) || id; }).join('・') + '）')
+        : '入金が読めていないので、入金と残りは出していません（0円ではありません）。') + '</p>' : '');
+  }
 
-    $('rep-body').innerHTML = s2.rows.map(function (r) {
-      var tag = unk ? '' : '<span class="tag ' + (r.state === 'paid' ? 'tag-on'
-        : r.state === 'unpaid' ? 'tag-off' : 'tag-mute') + '">'
-        + (DOC.PAY_STATE_LABEL[r.state] || '') + '</span>';
-      return '<div class="rep-row"><span class="rep-n">' + tag + esc(r.name)
-        + '<span class="rep-k">' + r.count + '通</span></span>'
-        + '<span class="rep-a">' + yen(r.total) + ' 円'
-        + (unk ? '' : '<span class="rep-k">入金 ' + yen(r.paid) + ' ／ 残り ' + yen(r.remain) + '</span>')
-        + '</span></div>';
-    }).join('')
-      + (unk ? '<p class="hint">入金が読めていないので、入金と残りは出していません（0円ではありません）。</p>' : '');
+  /** ★この月の集計だけ Excel に★（手本 exportReport＝daikou-seikyu.html:12680）
+   *  ・中身は ★画面の 表と 同じ REP.summarize の 数★を そのまま 並べるだけ（足し直さない）
+   *  ・金額は 数のまま（相手の Excel で 足し算できる）・桁区切りは 書式で 付ける
+   *  ・★入金が 読めていない時は 作らない★（手本と 同じ＝入金0・全部未入金 の 表を 出さない）
+   *  ・落とすのは 今の Excel の 出し口（SeikyuOut.excel）1本 */
+  /** ★紙の「ご請求金額」と 違って 見える 訳を 字で 言う★（繰越・源泉・控除）＝数は gakuOf 1本 */
+  function repNote(list, month) {
+    var kuri = 0, gen = 0, ko = 0;
+    list.forEach(function (v) {
+      if (!v || (v.doc_type || 'invoice') !== 'invoice' || v.status !== 'issued') return;
+      if (month && billYm(v) !== month) return;
+      var c = v.snapshot && v.snapshot.carry;
+      if (c && c.state !== 'first' && Number(c.carry)) kuri++;
+      if (v.snapshot && v.snapshot.gensen) gen++;
+      if (v.totals && Number(v.totals.deduct)) ko++;
+    });
+    var t = [];
+    if (kuri) t.push(kuri + '通は 紙の「ご請求金額」に 前回からの 繰越が 入っています。ここでは その1通の 分だけを 数えています（繰越分は 前の月で 数えています）');
+    if (gen) t.push(gen + '通は 源泉徴収を 引いた 額（相手が 払う 額）で 数えています');
+    if (ko) t.push(ko + '通は 控除を 引いた 額で 数えています');
+    return t.length ? '<p class="hint" id="bk-rep-note">' + esc(t.join('。') + '。') + '</p>' : '';
+  }
+  function repExcelSheet() {
+    var month = repMonth || '';
+    var src = billSrc();
+    if (src.ok !== true) return { why: billYomenai(src.ok) };
+    var s2 = reportOf(month, 'invoice', src.list);
+    if (!s2 || !s2.seen) return { why: 'この月に 発行した請求書が ありません。' };
+    if (s2.totals.paid === null && choubo().warn.length) return { why: VOIDWARN };
+    if (s2.totals.paid === null) return { why: '入金が 読めていないので、集計の Excel は 作りません（入金0円の 表を 出さない為）。「もっと」の中の「読み直す」を 押してから もう一度 お試しください。' };
+    var lb = month ? ymLabel(month) : 'ぜんぶ';
+    /* 赤伝の 差し引きが ある 時だけ 列を 足す（画面の 表と 同じ） */
+    var sashi = s2.rows.some(function (r) { return r.credit; });
+    var aoa = [['月', '取引先', '件数', '請求額'].concat(sashi ? ['赤伝で差し引き'] : [], ['入金額', '残額', '状態'])];
+    s2.rows.forEach(function (r) {
+      aoa.push([lb, r.name, r.count, r.total].concat(sashi ? [-r.credit] : [], [r.paid, r.remain, DOC.PAY_STATE_LABEL[r.state] || '']));
+    });
+    var t = s2.totals;
+    aoa.push(['合計', s2.rows.length + '社', t.count, t.total].concat(sashi ? [-t.credit] : [], [t.paid, t.remain, '']));
+    var numFmt = [];
+    for (var r = 1; r < aoa.length; r++) (sashi ? [3, 4, 5, 6] : [3, 4, 5]).forEach(function (c) { numFmt.push({ r: r, c: c, z: AOA.YEN_FMT }); });
+    return { sheet: { aoa: aoa, numFmt: numFmt, name: '月次集計',
+      cols: [{ wch: 10 }, { wch: 28 }, { wch: 6 }, { wch: 12 }].concat(sashi ? [{ wch: 14 }] : [], [{ wch: 12 }, { wch: 12 }, { wch: 10 }]) },
+      name: '月次集計_' + (month || 'ぜんぶ') + '.xlsx' };
+  }
+  function repExcel() {
+    box('bk-rep-ok', ''); box('bk-rep-err', '');
+    var x = repExcelSheet();
+    if (!x.sheet) { box('bk-rep-err', x.why); return; }
+    askNameWith(x.name, 'xlsx', function (n) {
+      OUT.excel(x.sheet, n)
+        .then(function () { box('bk-rep-ok', n + ' を保存しました。'); })
+        .catch(function (e) { box('bk-rep-err', 'Excelが出せませんでした（' + ((e && e.message) || 'error') + '）'); });
+    });
+  }
+
+  /* ═══ ★請求 / 集計 の「請求書」の側★（2026-10-23）═══
+     司さん「請求／集計のページを作って、代行請求書と全く同じ作りでやって」
+     手本＝代行請求 #scr-billing（refreshInvoiceSelects 6670・generateInvoices 6730・exportInvoicePDF 7437）
+       ・月（既定は 最新の月）と 取引先（先頭「全社」）を 選ぶ → その月・その相手の 紙を 下に 並べる
+       ・全社なら ★全部の 紙を 続けて★／PDF も 1つに まとめる（請求書_YYYY-MM_全社.pdf）
+     ★新しく 作らない 物★
+       ・紙 … 一覧の「確認」（lookPaper）と 同じ paperInput → PAPER.build
+       ・PDF … 同じ SeikyuPdf.build（紙ごとに 通して、出来た PDF を 頁ごと つなぐだけ）
+       ・Excel … 1通なら doExcel と 同じ道（自社の Excel も 効く）／まとめは 同じ AOA.build を 1冊に
+     ★出すのは 発行した 請求書だけ★＝集計（REP.summarize）と 同じ 数え方
+       （下書き・取り消し・見積は 出さない＝まだ 請求していない 物を 紙にしない）。 */
+  var billSeg = 'invoice';                    // 'invoice'＝請求書 ／ 'report'＝集計
+  var billPick = { ym: null, pid: '' };       // ym: null＝まだ人が 選んでいない（＝最新の月）／pid: ''＝全社
+  var billKey = '';                           // ★同じ 中身なら 紙を 作り直さない★（読み直しの たびに 枠が ちらつかない）
+
+  /* ★★請求書の 棚★★（taiketsu 10-24 止1）
+     S.invoices は 一覧が 今 見ている 種類（S.docType）の 棚＝見積を 見ている 時は 見積しか 入っていない。
+     ⇒ 請求/集計は ★一覧の 種類に 依らず 請求書の 棚★から 描く。
+       ・一覧が 請求書を 読めている 時 … その 棚（S.invoices）
+       ・それ以外 … 別に 読んだ 請求書の 棚（S.billInv）／読めなければ ok=false（読み込み中は null） */
+  var _billNo = 0;
+  function billSrc() {
+    if (S.listKind === 'invoice' && S.listReadOk === true) return { ok: true, list: S.invoices || [] };
+    if (S.billOk === true) return { ok: true, list: S.billInv || [] };
+    return { ok: (S.billOk === false ? false : null), list: [] };
+  }
+  function billYomenai(ok) {
+    return ok === false
+      ? '請求書を 読めていません。通信を 確かめて、もう一度 この画面を 開いてください（一覧の「もう一度読み込む」でも 読み直せます）。'
+      : '請求書を 読み込んでいます…';
+  }
+  function loadBillInv() {
+    var my = ++_billNo;
+    if (S.billOk !== true) S.billOk = null;
+    var p;
+    try { p = Promise.resolve(S.store.invoices.list('invoice')); }
+    catch (e) { p = Promise.reject(e); }
+    return p.then(function (r) {
+      if (my !== _billNo) return;
+      S.billInv = r || []; S.billOk = true; billRedraw();
+    }, function (e) {
+      if (my !== _billNo) return;
+      console.error('★請求/集計：請求書を 取って来られませんでした★', e);
+      S.billOk = false; billRedraw();
+    });
+  }
+  /** ★読み直した 後、請求/集計を 開いていたら 描き直す★（同じ 中身なら 紙は 作り直さない） */
+  function billRedraw() {
+    var sb = $('scr-bill');
+    if (!sb || !sb.classList.contains('active')) return;
+    try { renderBill(); renderReport(); } catch (e) { box('bk-err', '請求書の画面が 描けませんでした（' + (e && e.message) + '）。'); }
+  }
+  function billIssued() {
+    return billSrc().list.filter(function (v) {
+      return v && (v.doc_type || 'invoice') === 'invoice' && v.status === 'issued';
+    });
+  }
+  /** 取引先の 選び肢＝マスタの 順＋★マスタに 無いが 請求書だけ 残っている 相手★（代行請求 6692-6694 と 同じ） */
+  function billPartners() {
+    var out = [], seen = {};
+    var master = S.partners || [];      /* ★マスタの 順★ */
+    master.forEach(function (p) {
+      if (!p || !p.id || seen[p.id]) return;
+      seen[p.id] = 1; out.push({ id: String(p.id), nm: (p.data && p.data.name) || '(名称未設定)' });
+    });
+    billIssued().forEach(function (v) {
+      var id = String(v.partner_id || '');
+      if (!id || seen[id]) return;
+      seen[id] = 1; out.push({ id: id, nm: partnerName(v) });
+    });
+    return out;
+  }
+  function billRows() {
+    var order = {};
+    billPartners().forEach(function (x, i) { order[x.id] = i; });
+    var at = function (v) { var o = order[String(v.partner_id || '')]; return (o === undefined) ? 1e9 : o; };
+    return billIssued().filter(function (v) {
+      if (billYm(v) !== billPick.ym) return false;
+      if (billPick.pid && String(v.partner_id || '') !== billPick.pid) return false;
+      return true;
+    }).sort(function (a, b) {
+      return (at(a) - at(b))
+        || String(a.issue_ymd || '').localeCompare(String(b.issue_ymd || ''))
+        || String(a.no || '').localeCompare(String(b.no || ''));
+    });
+  }
+  /** ★紙の 中身を 作る★＝「確認」と 同じ paperInput を 1通ずつ 通す（作りかけの 1通は 戻す） */
+  function billPaperInputs(rows) {
+    var keep = S.cur, keepDirty = S.dirty, out = [];
+    try {
+      rows.forEach(function (v) {
+        var c = JSON.parse(JSON.stringify(v));
+        if (!c.data) c.data = {};
+        if (!Array.isArray(c.lines) || !c.lines.length) c.lines = [blankLine()];
+        S.cur = c;
+        var pi = null;
+        try { pi = paperInput(); } catch (e) { pi = null; }
+        out.push({ v: v, pi: pi });
+      });
+    } finally { S.cur = keep; S.dirty = keepDirty; }
+    /* paperInput は 入力の 画面の 合計も 塗り直す＝★入力で 開いている 1通で 塗り直して 戻す★ */
+    if (rows.length && S.cur && S.cur === S.gamen) { try { recalc(); } catch (e) { /* 戻せなくても 紙は 出す */ } }
+    return out;
+  }
+  function billPartnerName(pid) {
+    var ps = billPartners();
+    for (var i = 0; i < ps.length; i++) if (ps[i].id === pid) return ps[i].nm;
+    return '';
+  }
+  function billSegShow(seg) {
+    billSeg = (seg === 'report') ? 'report' : 'invoice';
+    Array.prototype.forEach.call(document.querySelectorAll('#scr-bill .bk-panel'), function (p) {
+      p.classList.toggle('on', p.getAttribute('data-bseg') === billSeg);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#scr-bill .bk-seg-b'), function (b) {
+      var on = b.getAttribute('data-bseg') === billSeg;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    if (billSeg === 'report') renderReport(); else renderBill();
+  }
+  function renderBill() {
+    var mSel = $('bk-month'), pSel = $('bk-partner'), host = $('bk-papers');
+    if (!mSel || !pSel || !host) return;
+    var src = billSrc();
+    if (src.ok !== true) {
+      /* ★読めていない／読み込み中は その事を 言って 3つとも 止める★（「まだ 発行していない」と 嘘を 言わない） */
+      mSel.innerHTML = '<option value="">―</option>'; pSel.innerHTML = '<option value="">全社</option>';
+      $('bk-none').textContent = billYomenai(src.ok); show($('bk-none'), true);
+      ['b-bk-pdf', 'b-bk-print', 'b-bk-xlsx'].forEach(function (id) { var b = $(id); if (b) b.disabled = true; });
+      setText('bk-count', ''); host.innerHTML = ''; billKey = '';
+      return;
+    }
+    var months = global.SeikyuReport ? global.SeikyuReport.monthsOf(billIssued()) : [];
+    if (billPick.ym === null || months.indexOf(billPick.ym) < 0) billPick.ym = months[0] || '';
+    mSel.innerHTML = months.length
+      ? months.map(function (m) {
+        return '<option value="' + esc(m) + '"' + (m === billPick.ym ? ' selected' : '') + '>' + esc(ymLabel(m)) + '</option>';
+      }).join('')
+      : '<option value="">（発行した月が ありません）</option>';
+    mSel.value = billPick.ym;
+    var ps = billPartners();
+    if (billPick.pid && !ps.some(function (x) { return x.id === billPick.pid; })) billPick.pid = '';
+    pSel.innerHTML = '<option value="">全社</option>' + ps.map(function (x) {
+      return '<option value="' + esc(x.id) + '"' + (x.id === billPick.pid ? ' selected' : '') + '>' + esc(x.nm) + '</option>';
+    }).join('');
+    pSel.value = billPick.pid;
+
+    var rows = billRows();
+    var dare = billPick.pid ? billPartnerName(billPick.pid) : '全社';
+    /* ★無い時は 何が 無いかを 字で 出す★＋★3つとも 押せなくする★（黙って 何も起きない を 作らない） */
+    var none = $('bk-none');
+    if (!months.length) {
+      none.textContent = 'まだ 発行した請求書が ありません。「入力」で 作って「発行する」を 押すと、ここに 紙が 出ます（下書きは 出しません）。';
+    } else if (!rows.length) {
+      none.textContent = ymLabel(billPick.ym) + 'の ' + dare + (billPick.pid ? ' 宛ての' : 'の')
+        + ' 発行した請求書は ありません（下書きと 取り消した紙は 出しません）。別の月か 取引先を 選んでください。';
+    }
+    show(none, !rows.length);
+    ['b-bk-pdf', 'b-bk-print', 'b-bk-xlsx'].forEach(function (id) { var b = $(id); if (b) b.disabled = !rows.length; });
+    var kei = 0, yomeru = 0;
+    rows.forEach(function (v) { var g = gakuOf(v); if (typeof g === 'number') { kei += g; yomeru++; } });
+    /* ★金額の 読めない 1通を 黙って 抜かない★（一覧の 件数行と 同じ 注記） */
+    setText('bk-count', rows.length ? (ymLabel(billPick.ym) + '・' + dare + '　' + rows.length + '通（発行済み）'
+      + '　合計 ' + yen(kei) + ' 円' + (yomeru < rows.length ? '（金額が 入っている ' + yomeru + '通ぶん）' : '')) : '');
+
+    /* ★紙★ 同じ 中身なら 作り直さない（入金の 印などで 一覧を 読み直しても 枠が ちらつかない） */
+    var key = billPick.ym + '|' + billPick.pid + '|' + rows.map(function (v) {
+      return v.id + ':' + (v.updated_at || '') + ':' + (v.totals && v.totals.grandTotal);
+    }).join(',');
+    if (key === billKey && host.children.length === rows.length) return;
+    billKey = key;
+    var made = billPaperInputs(rows);
+    host.innerHTML = made.map(function (x, i) {
+      var v = x.v;
+      return '<div class="card bk-paper" data-id="' + esc(v.id) + '">'
+        + '<div class="bk-pname">' + esc(v.no || '（未採番）') + '　' + esc(partnerName(v))
+        + '<span class="bk-pdate">' + esc(v.issue_ymd || '') + '</span></div>'
+        + (x.pi
+          ? '<div class="pv-wrap" id="bk-wrap-' + i + '"><iframe class="pv" id="bk-pv-' + i + '" title="請求書の紙" tabindex="-1"></iframe></div>'
+          : '<div class="warn">この紙は 中身が 整っていないので 出せません。一覧の「修正」から 直してください。</div>')
+        + '</div>';
+    }).join('');
+    made.forEach(function (x, i) {
+      if (!x.pi) return;
+      var f = $('bk-pv-' + i); if (!f) return;
+      var fit = function () { fitPreviewOf('bk-pv-' + i, 'bk-wrap-' + i); };
+      f.onload = fit;
+      f.srcdoc = PAPER.build(x.pi).html;
+      /* srcdoc は 端末によって load が 来ない 事が 在るので 時間でも 1度 合わせる（確認と 同じ） */
+      global.setTimeout(fit, 260);
+    });
+  }
+
+  /* ── 出す（PDF／印刷／Excel） ── */
+  function billMade() {
+    var rows = billRows();
+    if (!rows.length) { box('bk-err', 'この月・この取引先の 発行した請求書が ありません。'); return null; }
+    var made = billPaperInputs(rows);
+    var ng = made.filter(function (x) { return !x.pi; });
+    if (ng.length) {
+      /* ★黙って 抜かない★＝1通でも 作れなければ 出さずに どれかを 言う */
+      box('bk-err', '中身が 整っていない 紙が ' + ng.length + '通 あるので 出せません（'
+        + ng.map(function (x) { return x.v.no || '（未採番）'; }).join('・') + '）。一覧の「修正」から 直してください。');
+      return null;
+    }
+    return made;
+  }
+  /** 名前＝1通なら 中身から（seikyu-name）／まとめは 代行請求と 同じ 請求書_YYYY-MM_全社（1社なら 相手の名前） */
+  function billName(made, ext) {
+    if (made.length === 1) {
+      var pi = made[0].pi;
+      return NAME.suggest({ docType: pi.inv.doc_type, issueYmd: pi.inv.issue_ymd,
+        partnerName: pi.partner.name, grandTotal: pi.tax.grandTotal, ext: ext });
+    }
+    var who = billPick.pid ? (NAME.sanitize(billPartnerName(billPick.pid)) || '取引先') : '全社';
+    return '請求書_' + billPick.ym + '_' + who + '.' + ext;
+  }
+  /** ★PDF は 紙ごとに 今の 作り（SeikyuPdf.build）を 通し、出来た 頁を 1つに つなぐ★ */
+  function billPdfBytes(made, name) {
+    var PDF = global.SeikyuPdf;
+    if (!PDF) return Promise.reject(new Error('PDFを作る部品が読めていません。画面を開き直してください'));
+    var all = [], miss = [], bad = 0;
+    var chain = made.reduce(function (p, x) {
+      return p.then(function () {
+        lastPaperHtml = PAPER.build(Object.assign({}, x.pi, { title: name })).html;
+        return PDF.build(lastPaperHtml, { base: '../' }).then(function (bytes) {
+          all.push(bytes);
+          (PDF.lastMissing ? PDF.lastMissing() : []).forEach(function (c) { if (miss.indexOf(c) < 0) miss.push(c); });
+          bad += (PDF.lastBadImages ? PDF.lastBadImages() : []).length;
+        });
+      });
+    }, Promise.resolve());
+    return chain.then(function () {
+      if (all.length === 1) return all[0];
+      var L = global.PDFLib;   /* ★SeikyuPdf.build が 読んだ 同じ 道具★（新しく 読みに 行かない） */
+      if (!L || !L.PDFDocument) throw new Error('PDFを つなぐ部品が 読めていません');
+      return L.PDFDocument.create().then(function (out) {
+        return all.reduce(function (p, b) {
+          return p.then(function () {
+            return L.PDFDocument.load(b).then(function (src) {
+              return out.copyPages(src, src.getPageIndices()).then(function (pages) {
+                pages.forEach(function (pg) { out.addPage(pg); });
+              });
+            });
+          });
+        }, Promise.resolve()).then(function () { return out.save(); });
+      });
+    }).then(function (bytes) { return { bytes: bytes, miss: miss, bad: bad }; });
+  }
+  /** yobi＝'PDF'／'印刷'（どちらも 開く＝そこの 共有ボタンから 送る・印刷する。★ブラウザの 印刷は 使わない★） */
+  function billPdf(made, name, yobi) {
+    box('bk-err', '');
+    box('bk-ok', yobi + 'を作っています…（' + made.length + '通・字を紙に埋め込むので 少し待ちます）');
+    /* ★「渡した」印は 出来た 後だけ★（taiketsu 10-24 止2）＝作れなかった PDF で 印を 付けない。
+       ★全社を まとめた PDF は 付けない★（取引先ごとに 送れない 物＝送った 証に ならない）。印刷は 出来たら 付ける。 */
+    var hitori = made.every(function (x) { return String(x.v.partner_id || '') === String(made[0].v.partner_id || ''); });
+    var shirushi = (yobi === '印刷') || hitori;
+    billPdfBytes(made, name).then(function (r) {
+      return OUT.pdfOpen(r.bytes, name).then(function (o) {
+        if (shirushi) billOkutta(made);
+        box('bk-ok', ((o && o.fellBack)
+          ? 'この端末では 新しい窓が開けなかったので、' + yobi + 'を 落としました。（ブラウザの ポップアップの設定を 見てください）'
+          : yobi + 'を 別の窓で 開きました（' + made.length + '通）。その画面の 共有ボタンから'
+            + (yobi === '印刷' ? ' 印刷できます（プリンタを 選びます）。' : ' 保存・メールなどで 送れます。'))
+          + (r.miss.length ? 'この字は 字体に無いので 〓 で出しました：' + r.miss.join('') : '')
+          + (r.bad ? '出せなかった絵が ' + r.bad + '件 あります' : '')
+          + (shirushi ? '' : '（全社の まとめは 取引先ごとに 送れないので「渡した」印は 付けません。取引先を 選んで 出すと 付きます）'));
+      });
+    }).catch(function (e) {
+      box('bk-ok', '');
+      box('bk-err', 'PDFが作れませんでした（' + (e && e.message) + '）。画面を 開き直して もう一度 お試しください。');
+    });
+  }
+  /** ★渡した 印★（一覧の「PDF」「印刷」と 同じ 決まり＝okutta）。読み直しは 最後に 1回だけ */
+  function billOkutta(made) {
+    if (!S.store || !S.store.invoices || !S.store.invoices.markSent) return;
+    var at = new Date().toISOString(), waits = [];
+    made.forEach(function (x) {
+      var v = x.v;
+      if (!v || !v.id || DOC.statusOf(v) !== 'issued' || v.sent_at) return;
+      v.sent_at = at;
+      waits.push(S.store.invoices.markSent(v.id, at).then(function (r) {
+        if (!r || !r.ok) v.sent_at = '';          /* しまえなければ 印も 戻す（嘘を 残さない） */
+      }, function () { v.sent_at = ''; }));
+    });
+    if (waits.length) Promise.all(waits).then(function () { return loadList(); }).catch(function () { /* 印だけ・客の 操作では ない */ });
+  }
+  function billExcel(made, name) {
+    box('bk-err', '');
+    if (made.length === 1) {
+      /* ★1通＝doExcel と 同じ 道★（自社の Excel を 覚えていれば そちらに 入れる） */
+      var keep = S.cur, keepDirty = S.dirty, b = null, sheet = null;
+      try {
+        S.cur = JSON.parse(JSON.stringify(made[0].v));
+        if (!S.cur.data) S.cur.data = {};
+        b = bookExcel(name);
+        if (!b) sheet = AOA.build(made[0].pi);
+      } finally { S.cur = keep; S.dirty = keepDirty; }
+      if (S.cur && S.cur === S.gamen) { try { recalc(); } catch (e) { /* 戻せなくても 出す */ } }
+      var p = b ? b.then(function (out) {
+        return '自社の Excel に 入れて 出しました（書いたセル ' + out.wrote.length + '個'
+          + (out.skipped.length ? '／入れられなかった ' + out.skipped.length + '個' : '') + '）。';
+      }) : OUT.excel(sheet, name).then(function () { return name + ' を保存しました。'; });
+      p.then(function (m) { box('bk-ok', m); })
+        .catch(function (e) { box('bk-err', 'Excelが出せませんでした（' + ((e && e.message) || 'error') + '）'); });
+      return;
+    }
+    /* ★まとめ＝1冊に 紙ごとの シート★（中身は 同じ AOA.build・書き方は SeikyuOut.excel と 同じ） */
+    var X = global.XLSX;
+    if (!X || !global.FileOut) { box('bk-err', 'Excelの部品が 読めていません。画面を開き直してください。'); return; }
+    var wb = X.utils.book_new(), used = {};
+    made.forEach(function (x, i) {
+      var sh = AOA.build(x.pi);
+      var ws = X.utils.aoa_to_sheet(sh.aoa);
+      if (sh.cols) ws['!cols'] = sh.cols;            // ★これが無いと相手の画面で ######## になる
+      (sh.numFmt || []).forEach(function (f) {
+        var ref = X.utils.encode_cell({ r: f.r, c: f.c });
+        if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = f.z;
+      });
+      /* シートの 名前＝請求番号（Excel の 決まり＝31字まで・[]:*?/\ は 使えない・同じ名前は 置けない） */
+      var nm = String(x.v.no || ('請求書' + (i + 1))).replace(/[\[\]:*?\/\\]/g, '-').slice(0, 28) || ('請求書' + (i + 1));
+      var base = nm, k = 2;
+      while (used[nm]) nm = base.slice(0, 25) + '(' + (k++) + ')';
+      used[nm] = 1;
+      X.utils.book_append_sheet(wb, ws, nm);
+    });
+    var bytes = X.write(wb, { bookType: 'xlsx', type: 'array' });
+    global.FileOut.deliver(bytes, name)
+      .then(function () {
+        box('bk-ok', name + ' を保存しました（' + made.length + '通を 1冊に・1通 1シート）。'
+          + (bookSaved() ? '自社の Excel に 入れるのは 1通ずつの 時です（取引先を 選ぶと 使えます）。' : ''));
+      })
+      .catch(function (e) { box('bk-err', 'Excelが出せませんでした（' + ((e && e.message) || 'error') + '）'); });
   }
 
   /* ═══ ★毎月の請求（今月まだの相手）★ ═══
@@ -399,7 +1152,9 @@
     var isInv = (S.kind || 'invoice') === 'invoice';
     if (!RC || !isInv) { host.innerHTML = ''; return; }
     var due = RC.dueList({ invoices: S.invoices || [], partners: S.partners || [],
-      ym: RC.ymOf(todayYmd()) });
+      ym: RC.ymOf(todayYmd()) })
+      /* ★消した 取引先は 出さない★（taiketsu 10-23 止B＝押すと 消した 相手の 下書きが 出来て 発行は 出来ない） */
+      .filter(function (d) { return !!ptLive(d.partnerId); });
     if (!due.length) { host.innerHTML = ''; return; }
     var ym = RC.ymOf(todayYmd());
     var lb = ym.slice(0, 4) + '年' + Number(ym.slice(5, 7)) + '月';
@@ -464,9 +1219,30 @@
      ★billList / billYm は 残す★＝一覧の 月の しぼり込みが 使っている
        （★月の 読み方は 1本★＝2か所で 別々に 切らない）。 */
 
+  /** ★一覧の 合計★＝発行済みの 請求書だけ（下書き・取り消し・見積は 足さない）。
+   *  soto＝合計に 入れなかった 物を 字で（「下書き 2件・取り消し 1件」）＝黙って 減らさない。 */
+  function listSumOf(rows) {
+    var n = 0, kei = 0, yomenai = 0, draft = 0, voided = 0, quote = 0;
+    (rows || []).forEach(function (v) {
+      if ((v.doc_type || 'invoice') !== 'invoice') { quote++; return; }
+      var st = DOC.statusOf(v);
+      if (st === 'draft') { draft++; return; }
+      if (st !== 'issued') { voided++; return; }
+      var g = gakuOf(v);
+      if (typeof g === 'number') { n++; kei += g; } else yomenai++;
+    });
+    var soto = [];
+    if (draft) soto.push('下書き ' + draft + '件');
+    if (voided) soto.push('取り消し ' + voided + '件');
+    if (quote) soto.push('見積 ' + quote + '件');
+    return { n: n, kei: kei, yomenai: yomenai, soto: soto.join('・') };
+  }
+
   function renderList() {
     renderRecurring();
-    renderReport();
+    /* ★2026-10-23 一覧の 頭の「ぜんぶ」の 集計は 外した★（司さん 赤丸）
+       ＝集計は 別の「請求／集計」の 画面へ 移る。renderReport そのものは 残す（その 画面が 呼ぶ）。
+       ここで 呼ぶのを やめただけ＝無い 欄を 触って 転ばない。 */
     var host = $('list-body'); if (!host) return;
     drawListPartners();
     var rows = S.invoices.filter(function (v) {
@@ -495,14 +1271,22 @@
     /* ★何件に 絞ったか・いくらか を 必ず出す★（代行請求の #listSum と 同じ）
        ＝「消えた」と 思わせない。★絞り込み中★と 書くのは 実際に 絞っている時だけ。 */
     var shibotta = !!((lp && lp.value) || (lm && lm.value));
-    var kei = 0, yomeru = 0;
-    rows.forEach(function (v) {
-      var g = v.totals && v.totals.grandTotal;
-      if (typeof g === 'number') { kei += g; yomeru++; }
-    });
-    setText('list-sum', rows.length + '件' + (shibotta ? '（絞り込み中）' : '')
-      + (yomeru ? '　合計 ' + yen(kei) + ' 円'
-        + (yomeru < rows.length ? '（金額が 入っている ' + yomeru + '件ぶん）' : '') : ''));
+    /* ★★合計は「発行済みの 請求書」だけ★★（2026-10-24 taiketsu が 止めた＝実測）
+       前は 金額が 数で 入っていれば 何でも 足していた＝★下書き（品名だけは 0・一部だけ金額は 1,100 等）
+       と 取り消した 1通（99,999）が 合計に 混ざり★、「金額まだ」の カードが 在るのに 注記も 出なかった。
+       ★決め★＝足すのは 発行済み（取り消し・下書き・見積を 除く）だけ・字で「発行済み N件の合計」と 言う。
+         ★下書きは 1通も 足さない★ので「金額まだ」（rowIssuesOf＝下書きだけを 見る）と 合計の 判定は ずれない。
+         発行済みが 0通の 絞りでは 合計を 出さずに その事を 字で 言う。お金の 計算（grandTotal）は 触らない。 */
+    var sumOf = listSumOf(rows);
+    var sumEl = $('list-sum');
+    if (sumEl) sumEl.innerHTML = '<span class="ls-n">' + rows.length + '件'
+      + (shibotta ? '（絞り込み中）' : '') + '</span>'
+      + '<span class="ls-v">' + (sumOf.n
+        ? '発行済み ' + sumOf.n + '件の合計 ' + yen(sumOf.kei) + ' 円'
+          + (sumOf.yomenai ? '<span class="ls-k">（金額が 読めない ' + sumOf.yomenai + '件は 入れていません）</span>' : '')
+        : '発行済みの請求書はありません')
+      + (sumOf.soto ? '<span class="ls-k">（' + sumOf.soto + 'は 合計に 入れていません）</span>' : '')
+      + '</span>';
     if (!rows.length) {
       host.innerHTML = '<div class="card"><div class="empty">'
         + (S.invoices.length ? 'この絞り込みに当てはまる請求書はありません。' : 'まだ請求書がありません。「＋ 新しい請求書」から出せます。')
@@ -513,7 +1297,7 @@
       var tag = v.status === 'issued' ? '<span class="tag tag-on">発行済</span>'
         : v.status === 'void' ? '<span class="tag tag-mute">取り消し</span>'
           : '<span class="tag tag-off">下書き</span>';
-      var g = (v.totals && v.totals.grandTotal);
+      var g = gakuOf(v);           /* ★紙の ご請求金額（繰越の 前）と 同じ 額★ */
       /* ★「まだ金額を入れていない下書き」を 0円と 見せない★（司さん 2026-08-30
          「項目だけ入れて金額入れずに保存もしとける？」＝★出来る★。だが 一覧では
           ★0円★と出ていて ★入れ忘れと 本当の0円が 見分けられなかった★）。
@@ -531,25 +1315,30 @@
            発行した 請求書は ★消せない★（番号を 二度 使わない為）＝嘘を 書かない。 */
       var keseru = DOC.canDelete(v) && v.id;
       var kesu = keseru ? '削除' : (DOC.canVoid(v) ? '取り消す' : '');
+      /* ★2026-10-23 司さん（赤丸）★＝金額の 行に ★会社名（左）と 合計金額（右端）★
+         （代行請求の .list-item＝.li-meta が 左・.li-amt が 右端）。
+         ★下書きで 金額が 無い時は 右端に「金額まだ N行」★（0円と 見せない 知らせは 消さない）。 */
+      var migi = waiting
+        ? '<span class="iv-amt iv-amt-mada">金額まだ ' + waiting + '行</span>'
+        : '<span class="iv-amt">' + (g === undefined || g === null ? '—' : yen(g) + ' 円') + '</span>';
       return '<div class="card iv-card">'
         + '<div class="iv-top">' + tag
-        + '<span class="iv-no">' + (esc(v.no) || '（未採番）') + '</span>'
-        + '<span class="iv-name">' + esc(partnerName(v)) + '</span></div>'
+        + '<span class="iv-no">' + (esc(v.no) || '（未採番）') + '</span></div>'
         + '<div class="iv-sub">' + esc(v.issue_ymd || '請求日なし')
         + (v.due_ymd ? '　期限 ' + esc(v.due_ymd) : '')
         + '　' + esc(payLabel(v))
         /* ★出したが まだ 渡していない★（2026-09-10）＝送り漏れが 一覧で 見える */
         + (DOC.statusOf(v) === 'issued' && !v.sent_at ? '　<b class="iv-mada">まだ渡していません</b>' : '')
         + '</div>'
-        + '<div class="iv-sub"><span class="iv-amt">'
-        + (waiting
-          ? '金額まだ ' + waiting + '行'
-          : (g === undefined || g === null ? '—' : yen(g) + ' 円'))
-        + '</span></div>'
-        + '<div class="btn-row iv-btns">'
-        + '<button class="btn-ghost" type="button" data-look="' + esc(v.id) + '">確認</button>'
-        + '<button class="btn-ghost" type="button" data-open="' + esc(v.id) + '">修正</button>'
-        + (kesu ? '<button class="bdel" type="button" data-kesu="' + esc(v.id) + '">' + kesu + '</button>' : '')
+        + '<div class="iv-line">'
+        + '<span class="iv-name">' + esc(partnerName(v)) + '</span>' + migi + '</div>'
+        /* ★ボタンは 控えめに★（2026-10-23 司さん「もっと スタイリッシュに」）
+           ＝太い 枠を やめ、カードの 下に 線で 区切った 1列（代行請求の 行の 操作は 控えめ）。
+           ★指で 押せる 高さ（44px）と 削除の 赤★は 守る。 */
+        + '<div class="iv-btns">'
+        + '<button class="iv-b" type="button" data-look="' + esc(v.id) + '">確認</button>'
+        + '<button class="iv-b" type="button" data-open="' + esc(v.id) + '">修正</button>'
+        + (kesu ? '<button class="iv-b iv-b-del" type="button" data-kesu="' + esc(v.id) + '">' + kesu + '</button>' : '')
         + '</div></div>';
     }).join('');
     Array.prototype.forEach.call(host.querySelectorAll('[data-open]'), function (b) {
@@ -608,6 +1397,9 @@
       S.receipts = r[1];                     // ★null のまま持つ＝「未確認」と「0件」を作り分ける
       S.quotes = (kind === 'quote') ? S.invoices : (r[2] || []);
       S.listReadOk = true; S.listAto = false; S.listKind = kind;   /* ★読めた 種類も 持つ★（種類が 違う 一覧では 繰越を 数えられない） */
+      /* ★請求/集計の 棚★（taiketsu 10-24 止1）＝請求書を 読めたら それを 持つ・見積なら 請求書を 別に 読む */
+      if (kind === 'invoice') { S.billInv = S.invoices; S.billOk = true; _billNo++; } else loadBillInv();
+      billRedraw();
       drawKind();
       renderList();
       drawYomenai();
@@ -617,6 +1409,8 @@
       console.error('★一覧を 取って来られませんでした★', e);   /* ★生の 文は 画面に 出さず ここに 残す★ */
       /* ★「できています」は 読めるまで 持ち越す★（「もう一度読み込む」が また 落ちても 消さない・taiketsu 10-13） */
       S.listReadOk = false; S.listAto = ato || S.listAto;
+      if (kind === 'invoice') { S.billOk = false; _billNo++; }   /* ★読めない 事を 請求/集計でも 言う★ */
+      billRedraw();
       drawYomenai();
       if ($('b-issue')) drawIssueButton();
     });
@@ -690,11 +1484,12 @@
       status: 'draft', tax_mode: s.taxMode, rounding: s.rounding,
       lines: [blankLine()],
       totals: {}, snapshot: {},
-      // ★列は作った時に「その1通の物」として写しておく★
-      //   あとで会社が列を変えても、作りかけの下書きの並びが勝手に変わらない。
+      /* ★★列は 写さない★★（2026-10-24 taiketsu 止2 の 試験で 見つけた）
+         ＝前は 作った時に 会社の列を data.cols へ 写していた。この写しは colsOf で
+           ★取引先だけの列より 先に 効く★ので、新しい1通には ★相手だけの列が 1度も 出なかった★。
+         ⇒ 紙の列は colsOf が その場で 決める（相手 → 会社 → 様式）。発行の時に 写し（snapshot.cols）へ 固める。 */
       data: {
         subject: '', memo: '', noMode: 'auto', term: { kind: 'none', n: 0 },
-        cols: COLS.normalizeSpec(s.cols || TPL.getOrDefault(s.template).cols),
       },
       template_id: s.template || TEMPLATE_ID, quote_from: '',
     };
@@ -707,6 +1502,13 @@
   function newInvoice() {
     S.cur = blankInvoice();
     S.dirty = false;
+    /* ★前の 1通の「当てた」印・札・知らせを 白紙に 持ち越さない★（2026-10-23 司さん
+       「新しい請求書を入力から作る時に、前の取引先の中身が反映されてる時がある」）
+       ＝前は 印が 残って 同じ 相手の 2通目に 前回が 当たらず、白紙の 上に「前回（No.…）と 同じで 用意しました」が 残った */
+    S.guessDone = false; S.guess = null; S.guessApplied = null;
+    S.jido = { cur: S.cur, vals: {} };          /* ★この 1通に 自動で 入れた 値★（相手を 変えたら 外す） */
+    ['tag-subject', 'tag-term', 'tag-gensen'].forEach(function (id) { show($(id), false); });
+    box('edit-ok', ''); box('edit-err', ''); box('edit-warn', '');
     // 取引先が1社だけなら選んでおく（白紙を埋めさせない）
     if (S.partners.length === 1) S.cur.partner_id = S.partners[0].id;
     applyPartnerDefaults();
@@ -715,8 +1517,6 @@
     goScreen('scr-edit');
   }
 
-  /* ★一覧の 取引先の 選び★＝今 出ている 紙に 出てくる 相手だけ 並べる
-     （1通も 無い 相手を 並べても 押す物が 増えるだけ）。 */
   /** ★何年何月分で しぼる★（2026-09-09 司さん
    *  「代行請求書アプリのように ここでも 請求ごとや 何年何月分とか 全体とか 選べれるようにして」）
    *  ★代行請求と 同じ作り★＝出した紙が 在る月だけを 実データから 拾って 新しい順。
@@ -732,7 +1532,7 @@
       mita[m] = 1; list.push(m);
     });
     list.sort().reverse();
-    el.innerHTML = '<option value="">月をぜんぶ</option>'
+    el.innerHTML = '<option value="">全期間</option>'
       + list.map(function (m) {
         return '<option value="' + esc(m) + '"' + (m === ima ? ' selected' : '') + '>'
           + esc(m.slice(0, 4) + '年' + String(Number(m.slice(5, 7))) + '月') + '</option>';
@@ -740,17 +1540,38 @@
     if (ima && el.value !== ima) el.value = '';   /* 無くなった月を 選んだままに しない */
   }
 
+  /* ★一覧の 会社の 選び★（2026-10-23 司さん 赤丸＝代行請求と 同じ）
+     ＝★取引先の 登録（マスタ）の 会社★を 登録の 順に（請求書が まだ 無い 会社も 並ぶ）。
+     ★登録から 消えたが 請求書は 残っている 相手★は 後ろに 足す（代行請求の 請求の 選びと 同じ
+       ＝消えた 相手の 請求書を 絞れなく しない）。先頭は「全社」＝value="" の 1個。 */
   function drawListPartners() {
     var el = $('l-partner'); if (!el) return;
     var ima = el.value || '';
     var mita = {}, list = [];
+    (S.partners || []).forEach(function (p) {
+      if (!p || !p.id || mita[p.id]) return;
+      mita[p.id] = 1;
+      list.push({ id: p.id, nm: (p.data && p.data.name) || '（名前なし）', d: p.data || {} });
+    });
+    /* ★同じ 名前の 取引先が 2件 在る時は 見分けが 付く 字を 添える★（2026-10-24 taiketsu）
+       ＝住所 → 番号 → 電話 の 順に 在る物。どれも 無ければ 登録の 何番目か。 */
+    var kazu = {};
+    list.forEach(function (x) { kazu[x.nm] = (kazu[x.nm] || 0) + 1; });
+    var jun = {};
+    list.forEach(function (x) {
+      if (kazu[x.nm] < 2) return;
+      jun[x.nm] = (jun[x.nm] || 0) + 1;
+      var d = x.d || {};
+      var soe = String(d.addr || '').trim() || (d.code ? '番号 ' + String(d.code).trim() : '')
+        || String(d.tel || '').trim() || ('登録 ' + jun[x.nm] + '件目');
+      x.nm = x.nm + '（' + soe + '）';
+    });
     (S.invoices || []).forEach(function (v) {
       if (!v.partner_id || mita[v.partner_id]) return;
       mita[v.partner_id] = 1;
       list.push({ id: v.partner_id, nm: partnerName(v) });
     });
-    list.sort(function (a, b) { return String(a.nm).localeCompare(String(b.nm), 'ja'); });
-    el.innerHTML = '<option value="">すべての取引先</option>'
+    el.innerHTML = '<option value="">全社</option>'
       + list.map(function (x) {
         return '<option value="' + esc(x.id) + '"' + (x.id === ima ? ' selected' : '') + '>' + esc(x.nm) + '</option>';
       }).join('');
@@ -830,6 +1651,8 @@
     var v = null;
     for (var i = 0; i < S.invoices.length; i++) if (S.invoices[i].id === id) v = S.invoices[i];
     if (!v) return Promise.resolve();
+    /* ★発行の 返事を 待つ 1通は 消さない★（消すのが 先に 当たると 発行で 生き返り、後に 当たると 0行で「消せた」に なる） */
+    if (hakkoMachi(v)) { box('list-err', '発行の 返事を 待っています。少し 待ってから、もう一度 お試しください。'); return Promise.resolve(); }
     var mae = { cur: S.cur, dirty: S.dirty };
     S.cur = JSON.parse(JSON.stringify(v));
     S.dirty = false;
@@ -863,6 +1686,12 @@
     var v = null;
     for (var i = 0; i < S.invoices.length; i++) if (S.invoices[i].id === id) v = S.invoices[i];
     if (!v) { box('list-err', 'この請求書が見つかりませんでした。「読み直す」を押してください。'); return; }
+    /* ★発行の 返事を 待つ 1通は、写しで なく その 1通 そのものを 開く★（taiketsu 10-25 止A）＝写しで 開くと「別の 1通」に 見えて
+       自動の しまいと「保存」の 止めを すり抜け、下書きの 9000 が 発行済みの 7000 と 食い違ったり 凍結に 拒まれたりした */
+    /* id の 付く 前でも 同じ 番号の 行なら その 1通（写しは 倉庫の 古い 下書きで、開き直すと 打ち直した 値が 古い 値に 戻った・taiketsu 5回 止2） */
+    /* 開き直したら ★打ちかけの 印を 立てる★（別の 1通を 開いた 時に 印が 落ち、断られると 打った 値が 黙って 消えた・taiketsu 6回 止1）
+       ＝返事の 後に その 1通を もう一度 しまう（同じ 中身なら 害は 無い） */
+    if (hakkoMachi(v)) { S.cur = S.hakkoChu; S.dirty = true; fillEdit(); goScreen('scr-edit'); return; }
     S.cur = JSON.parse(JSON.stringify(v));
     S.dirty = false;                  // ★前の 1通の「直しかけ」を 持ち越さない★（taiketsu 10-14）
     /* ★保存できなかった 1通は ★打った 値で★ 開く★（倉庫の 古い値で 上書きしない＝打った物を 黙って 捨てない） */
@@ -875,6 +1704,44 @@
   }
 
   function locked() { return S.cur && !DOC.canEdit(S.cur); }
+
+  /* ★その 1通は 発行の 返事を 待っているか★（2026-10-25 taiketsu 3回）＝同じ 物か ★同じ id★ か で 見る
+     （一覧から 開いた 写しも 同じ 1通。写しを 別の 1通と 見ると 自動の しまい・保存・削除が 止めを すり抜けた）。
+     止める 口は ここ 1つ（自動の しまい・保存・削除・取り消し・一覧から 消す）＝口ごとに 書くと 口が 増えた 日に 割れる */
+  function hakkoMachi(v) {
+    var h = S.hakkoChu;
+    if (!(h && v)) return false;
+    if (h === v || (v.id && h.id === v.id)) return true;
+    /* ★まだ id の 無い 1通★（最初の しまいが 倉庫に 当たり、返事の 前）＝★一覧の 行（id の 在る 物）だけ★ 同じ 種類・同じ 番号で 見分ける
+       （番号は 種類ごとに 1つ＝倉庫の 一意。taiketsu 4回 止1＝見分けないと 古い 下書きの 写しが 開き、発行済みの 金額を 書き戻した）。
+       id の 無い 別の 1通（新しく 作って 自動で 同じ 番号が 出た 等）は 止めない（taiketsu 5回 止1＝止めると 打った 字が 黙って 残らなかった） */
+    /* 番号は ★発行を 押した 時の 番号★（S.hakkoNo）＝返事待ちに 相手を 選び直すと 番号が 取り直されて 動いた・taiketsu 6回 止2 */
+    var no = S.hakkoNo || h.no;
+    return !h.id && !!v.id && !!no && String(v.no || '') === String(no) && (v.doc_type || 'invoice') === (h.doc_type || 'invoice');
+  }
+
+  /* ★今の 1通は 保存か 発行を 終えて、その後 何も 打っていないか★（2026-10-23）
+     ＝下の「入力」を 押した時に 白紙で 開く 条件。打ちかけ・しまえなかった 1通は 続きを 出す（失わない） */
+  /* ★人が 打つ 中身★（番号・状態は 倉庫の 返事で 変わるので 入れない） */
+  function nakamiKata(v) {
+    return JSON.stringify([v.partner_id, v.issue_ymd, v.due_ymd, v.tax_mode, v.rounding,
+      cleanLines(v.lines || []), ['subject', 'memo', 'term', 'gensen', 'deductions', 'lead'].map(function (k) {
+        return (v.data || {})[k];
+      })]);
+  }
+  function owattaKata(v) { return JSON.stringify([v.no, v.status, nakamiKata(v)]); }
+  /* ★保存の 比べ★＝番号も 入れる（返事待ちに 番号を 打っても 見分ける）。発行は 番号が 進むので nakamiKata だけ */
+  function hozonKata(v) { return JSON.stringify([v.no, nakamiKata(v)]); }
+  function owattaOboe(v) { S.owatta = v; S.owattaKata = v ? owattaKata(v) : null; }
+  function owattaNoMama() {
+    var v = S.cur;
+    if (!v || !S.owatta || S.owatta !== v || S.dirty) return false;
+    /* ★終えた 後に 1文字でも 触ったら 続き★（taiketsu S6＝保存の 後に 打つと 1.5秒の 自動しまいで dirty が 戻り、
+       一覧→入力 で 直している 途中の 1通が 消えた ように 見えた）＝終えた 時の 中身と 比べる */
+    if (S.owattaKata !== owattaKata(v)) return false;
+    if (S.ochita && ((v.id && S.ochita[v.id]) || (v._k && S.ochita[v._k]))) return false;
+    return true;
+  }
 
   function fillEdit() {
     var v = S.cur; if (!v) return;
@@ -895,7 +1762,7 @@
        2社目からは ★外のアプリへ行くしかなかった★＝司さんの決定と食い違う。 */
     fillSelect($('e-partner'), [{ v: '', t: '（選んでください）' }].concat(S.partners.map(function (p) {
       return { v: p.id, t: (p.data && p.data.name) || '(名称未設定)' };
-    })), v.partner_id || '');
+    })).concat(ptGoneOpt(v) ? [ptGoneOpt(v)] : []), v.partner_id || '');
     /* ★注意書きは「今 困っている時」だけ出す（いつも出ていると読まれない）
        ★外のアプリへ行かせない★（司さん 2026-08-17）
          前は「Exally のハブで追加してください」＝★1通も出さないうちに 外へ出していた★。
@@ -1158,16 +2025,39 @@
     var t = TPL.getOrDefault(cur);
     setText('tpl-strip-v', t.label);
     show(strip, true);
-    /* ★どこで そう決まったのかを 言う★（同じ状態を 2か所で 別々に 判定しない） */
-    var pt = SCOPE && SCOPE.partnerPaper(partnerById(v.partner_id)).template;
-    var g = ro ? null : tplFromRireki(v.partner_id);
-    var kara = ro ? '発行済み＝出した時の 紙のまま（設定を変えても 動きません）'
-      : (pt && TPL.get(pt)) ? 'この取引先は 設定で この紙に してあります'
-        : (g && g.id === cur) ? (g.na + ' には 前回 この紙で 出しています（' + (g.ymd || '日付なし') + '）')
-          : '会社の 既定（設定の「紙の様式」）です';
+    /* ★どこで そう決まったのかを 言う★（同じ状態を 2か所で 別々に 判定しない＝tplKara 1つ） */
+    var kara = ro ? '発行済み＝出した時の 紙のまま（設定を変えても 動きません）' : tplKara(v.partner_id).kara;
     setText('tpl-strip-why', kara + '。項目（列）も 設定で 足す・消す・並べ替えが できます。');
     show(why, true);
     var ch = $('b-tpl-change'); if (ch) show(ch, !ro);
+    /* ★取引先ごとに 紙を 変えられる事を ここで 見せる★（2026-10-23 司さん
+         「会社ごとに 請求書の様式の変えも ちゃんとできるか 分かりにくい」）
+       ＝前は「設定で変える」が 会社の既定へ 行くだけで、取引先ごとの 決め所（設定 ▸ 取引先 の
+         「ぜんぶ見る」の中）は ★入力からは 見えなかった★。相手が 決まっている時だけ 出す。 */
+    var pb = $('b-tpl-pt');
+    if (pb) {
+      var pOk = !ro && !!partnerById(v.partner_id);
+      show(pb, pOk);
+      if (pOk) {
+        var pt0 = SCOPE.partnerPaper(partnerById(v.partner_id)).template;
+        pb.textContent = (pt0 && TPL.get(pt0)) ? 'この取引先の紙を変える' : 'この取引先だけ 別の紙にする';
+      }
+    }
+  }
+
+  /** ★この相手に 今 出る紙と、どこで そう決まったか★（入力と 設定 ▸ 取引先 の 両方が これを 見る） */
+  function tplKara(pid) {
+    var cur = templateForPartner(pid);
+    var p = partnerById(pid);
+    var na = (p && p.data && p.data.name) || 'この取引先';
+    var kaisha = TPL.getOrDefault(settings().template).label;
+    var pt = SCOPE && SCOPE.partnerPaper(p).template;
+    var g = tplFromRireki(pid);
+    var kara = (pt && TPL.get(pt))
+      ? (na + ' は 設定 ▸ 取引先 で この紙に してあります（会社の既定は「' + kaisha + '」）')
+      : (g && g.id === cur) ? (na + ' には 前回 この紙で 出しています（' + (g.ymd || '日付なし') + '）')
+        : '会社の 既定（設定の「紙の様式」）です。取引先ごとに 別の紙にも できます';
+    return { id: cur, label: TPL.getOrDefault(cur).label, kara: kara, own: !!(pt && TPL.get(pt)) };
   }
 
   /** ★その1通に 効く 様式★＝取引先の決め → 会社の既定（設定が 唯一の正） */
@@ -1210,6 +2100,7 @@
     var jibunDe = !!(mae && JSON.stringify([mae.items, mae.widths, mae.aligns])
       !== JSON.stringify([maeKitei.items, maeKitei.widths, maeKitei.aligns]));
     if (!mae || !jibunDe) v.data.cols = COLS.normalizeSpec(TPL.getOrDefault(id).cols);
+    v.data.colsTpl = id;              /* ★人が 選んだ 様式の 列＝この様式で 使う★ */
     /* ★1問ごと保存★（下書きだけ。発行済みは触らない） */
     /* 日付と番号がそろっている下書きだけ その場で保存する
        （そろう前に保存を呼ぶと「請求日を入れてください」の赤が出る＝まだ聞いていない事で怒らない） */
@@ -1226,9 +2117,133 @@
      ⇒ うちも 問いを やめる。ただし ★黙っては やらない★＝
        何を 引き継いだかを ★1行 言う★（決まり「黙って いじらない」を 破らない）。
      ★明細の 中身は 引き継がない★（毎月 違う）＝前と 同じ。 */
+  /* ★★相手から 自動で 入れた 値を 覚えて、相手を 変えたら 外す★★（2026-10-23 司さん
+       「新しい請求書を入力から作る時に、前の取引先の中身が反映されてる時がある」）
+     ★実測（本物の 画面を jsdom で 押した）★
+       ・A社を 選ぶ → 前回の 件名・備考・明細・控除・支払期限・源泉・税の 入れ方が 入る
+         → ★B社に 選び直す★と、B社に 前回が 無ければ ★A社の 物が 全部 残った★。
+         B社に 前回が 在っても ★A社の 明細と 控除が 残り★ B社の 明細は 入らなかった
+         （「まだ 何も 打っていない 時だけ 入れる」が A社から 入れた 行を「打った 行」と 見た）。
+       ・A社を 選んで 1.5秒で 自動で しまわれ id が 付くと、その後の 選び直しは ★何も 外さず 当て直しも しない★。
+     ★決め★
+       ・前回から 当てるのは ★同じ 相手の 時だけ★＝相手を 変えたら、前の 相手から 入れた 値は 外す
+       ・★外すのは 入れた 値の まま の 物だけ★＝人が 直した 物（打った 件名・打ち直した 明細）は 消さない
+       ・覚えるのは ★新しく 作った 下書き★だけ（一覧から 開いた 1通・発行済みは 人の 物＝触らない）
+       ・お金の 計算は 触らない＝外した 後の 値は「最初から その相手を 選んだ 1通」と 同じ */
+  function zeiNa(m) { return m === 'inclusive' ? '税込み' : '税抜き'; }
+  function marumeNa(r) { return r === 'ceil' ? '切り上げ' : r === 'round' ? '四捨五入' : '切り捨て'; }
+  function jidoNoCur(v) {
+    return !!(v && S.jido && S.jido.cur === v && DOC.statusOf(v) === 'draft');
+  }
+  function jidoKata(v, k) {
+    var d = v.data || {};
+    if (k === 'subject') return String(d.subject || '');
+    if (k === 'memo') return String(d.memo || '');
+    if (k === 'term') return [(d.term && d.term.kind) || 'none', Number((d.term && d.term.n) || 0)];
+    if (k === 'due') return String(v.due_ymd || '');
+    if (k === 'gensen') return !!d.gensen;
+    if (k === 'tax') return String(v.tax_mode || '');
+    if (k === 'round') return String(v.rounding || '');
+    return null;
+  }
+  /* ★明細・控除は ★1行ずつ★ 覚える★（taiketsu S5 2026-10-23）
+     ＝前は 全部の 行を まとめて 比べたので、1行でも 触る（×で 消す・単価を 直す）と
+       触っていない A社の 行まで 全部 残った。★入れた まま の 行だけ 外す★（直した 行は 残す） */
+  function jidoGyo(l) {
+    l = l || {};
+    /* ★会社が 足した 列（extra）も 比べる★（taiketsu 止3＝「現場」だけ 打った 行が「入れた まま」と 見られて 外れた） */
+    var ex = l.extra || {};
+    var exKata = Object.keys(ex).sort().filter(function (k) { return String(ex[k] == null ? '' : ex[k]) !== ''; })
+      .map(function (k) { return [k, String(ex[k])]; });
+    return JSON.stringify([String(l.name || ''), String(l.qty || ''), String(l.unit || ''), String(l.price || ''),
+      String(l.amount || ''), String(l.rate == null ? '' : l.rate), !!l.nontax, String(l.memo || ''), exKata]);
+  }
+  function jidoKoujo(x) {
+    return JSON.stringify([String((x && x.name) || ''), String((x && x.amount) == null ? '' : x.amount)]);
+  }
+  function gyoAru(l) {
+    return !!(l && (String(l.name || '').trim() || String(l.amount || '').trim() || String(l.price || '').trim()));
+  }
+  function jidoBasho(v) {
+    if (!v) return null;
+    if (!S.jido || S.jido.cur !== v) {
+      if (v.id) return null;          /* 一覧から 開いた 1通は 覚えない（人の 物） */
+      S.jido = { cur: v, vals: {}, lines: [], ded: [] };
+    }
+    if (!S.jido.lines) S.jido.lines = [];
+    if (!S.jido.ded) S.jido.ded = [];
+    return S.jido;
+  }
+  function jidoOboe(v, keys) {
+    var j = jidoBasho(v); if (!j) return;
+    keys.forEach(function (k) { j.vals[k] = JSON.stringify(jidoKata(v, k)); });
+  }
+  /** 入れた 行を 覚える（★足した 行だけ★） */
+  function jidoGyoOboe(v, lines, deds) {
+    var j = jidoBasho(v); if (!j) return;
+    (lines || []).forEach(function (l) { j.lines.push(jidoGyo(l)); });
+    (deds || []).forEach(function (x) { j.ded.push(jidoKoujo(x)); });
+  }
+  /** 前の 相手から 入れた まま の 値を 外す。
+   *  戻り＝{ out: 外した 物の 名前, nokoriL/nokoriD: 残した（打った・直した）行の 数 }（言う為） */
+  function jidoHazusu(v) {
+    var kekka = { out: [], nokoriL: 0, nokoriD: 0 };
+    if (!jidoNoCur(v)) return kekka;
+    var j = S.jido.vals, d = v.data = v.data || {}, s = settings(), out = kekka.out;
+    var mama = function (k) { return Object.prototype.hasOwnProperty.call(j, k) && j[k] === JSON.stringify(jidoKata(v, k)); };
+    if (mama('subject') && d.subject) { d.subject = ''; out.push('件名'); }
+    if (mama('memo') && d.memo) { d.memo = ''; out.push('備考'); }
+    /* 明細＝入れた まま の 行だけ 外す */
+    var mi = (S.jido.lines || []).slice(), hazuL = 0;
+    var nokoriLines = (v.lines || []).filter(function (l) {
+      if (!gyoAru(l)) return false;
+      var i = mi.indexOf(jidoGyo(l));
+      if (i >= 0) { mi.splice(i, 1); hazuL++; return false; }
+      return true;
+    });
+    if (hazuL) {
+      v.lines = nokoriLines.length ? nokoriLines : [blankLine()];
+      out.push('明細 ' + hazuL + '行');
+      kekka.nokoriL = nokoriLines.length;
+    }
+    var md = (S.jido.ded || []).slice(), hazuD = 0;
+    var nokoriDed = (d.deductions || []).filter(function (x) {
+      var i = md.indexOf(jidoKoujo(x));
+      if (i >= 0) { md.splice(i, 1); hazuD++; return false; }
+      return true;
+    });
+    if (hazuD) { d.deductions = nokoriDed; out.push('控除 ' + hazuD + '行'); kekka.nokoriD = nokoriDed.length; }
+    if (mama('term') && d.term && d.term.kind && d.term.kind !== 'none') {
+      /* ★期日は 支払期限から 自動で 出た 物なら 一緒に 外す★（taiketsu S4＝請求日を 変えると 期日が 動き、
+         覚えた 値と 違って 期日だけ A社の まま 残った）。手で 打った 期日は 残す */
+      if (mama('due') || String(v.due_ymd || '') === String(DOC.dueDateFrom(v.issue_ymd, d.term) || '')) v.due_ymd = '';
+      d.term = { kind: 'none', n: 0 }; out.push('支払期限');
+    }
+    if (mama('gensen') && d.gensen) { d.gensen = false; out.push('源泉徴収'); }
+    /* ★税の 入れ方・端数★（taiketsu S2/S3・指示役の 決め 2026-10-23）
+       ・★打った・直した 明細が 残る 時は 戻さない★＝打った 金額の 意味（税込みで 打った 60000）を 変えない。
+         そのまま に した事を 言う（kekka.zeiNokoshi）
+       ・外す 行しか 無い 時は 会社の 既定に 戻す。★言うのは 当て直しが 終わった 後の 値と 比べて★（aiteWoKaeta）
+         ＝ここで「戻した」と 書くと、次の 相手の 前回が 税込みを 入れ直した 時に 字と 中身が 逆に なる */
+    kekka.taxMae = v.tax_mode; kekka.roundMae = v.rounding;
+    var zei = mama('tax') && v.tax_mode !== s.taxMode, hasu = mama('round') && v.rounding !== s.rounding;
+    if (nokoriLines.length && (zei || hasu)) {
+      kekka.zeiNokoshi = true;
+    } else {
+      if (zei) v.tax_mode = s.taxMode;
+      if (hasu) v.rounding = s.rounding;
+    }
+    S.jido = { cur: v, vals: {}, lines: mi, ded: md };
+    /* 残した 税・端数は この1通の 物として 覚え直す（次に 選び直した 時も 打った 行が 在れば 残す） */
+    if (kekka.zeiNokoshi) jidoOboe(v, ['tax', 'round']);
+    return kekka;
+  }
+
   function renderGuess() {
     var v = S.cur;
-    if (!v || locked() || v.id || S.guessDone) return;
+    /* ★id が 付いても 新しく 作った 下書きなら 当て直す★（相手を 選んで 1.5秒で 自動で しまわれ id が 付く。
+       前は その後に 相手を 選び直すと 何も 当てず 前の 相手の 中身が 残った・2026-10-23） */
+    if (!v || locked() || (v.id && !jidoNoCur(v)) || S.guessDone) return;
     if (!v.partner_id) return;
     var g = guessFrom(prevOf(v.partner_id));
     S.guess = g;
@@ -1241,10 +2256,27 @@
     var g = S.guess, v = S.cur;
     if (!g || !v) return;
     v.data.term = { kind: (g.term && g.term.kind) || 'none', n: (g.term && g.term.n) || 0 };
-    v.data.subject = g.subject;
-    v.data.memo = g.memo;
-    if (g.taxMode) v.tax_mode = g.taxMode;
-    if (g.rounding) v.rounding = g.rounding;
+    /* ★打った 件名・備考は 上書きしない★（自動で 入れた 物は 相手を 変えた時に もう 外してある・2026-10-23） */
+    var jido = ['term', 'gensen'];
+    if (!String(v.data.subject || '').trim()) { v.data.subject = g.subject; jido.push('subject'); }
+    if (!String(v.data.memo || '').trim()) { v.data.memo = g.memo; jido.push('memo'); }
+    /* ★打った・直した 明細が 在る 時は 前回の 税の 入れ方・端数を 当てない★（指示役の 決め 2026-10-23）
+       ＝打った 金額の 意味（税込みで 打った 60000）を 変えない。当てなかった 事は 知らせで 言う */
+    var uttaGyo = Array.isArray(v.lines) && v.lines.some(gyoAru);
+    var zeiTome = '', zeiChigau = false;
+    if (!uttaGyo) {
+      if (g.taxMode) { v.tax_mode = g.taxMode; jido.push('tax'); }
+      if (g.rounding) { v.rounding = g.rounding; jido.push('round'); }
+    } else {
+      var tomeTax = !!(g.taxMode && g.taxMode !== v.tax_mode), tomeRound = !!(g.rounding && g.rounding !== v.rounding);
+      if (tomeTax || tomeRound) {
+        zeiChigau = true;
+        zeiTome = '打った 明細が 在るので、' + [tomeTax ? '金額の入れ方（' + zeiNa(v.tax_mode) + '）' : '',
+          tomeRound ? '端数の 扱い（' + marumeNa(v.rounding) + '）' : ''].filter(Boolean).join('と ')
+          + ' は 前回（' + [tomeTax ? zeiNa(g.taxMode) : '', tomeRound ? marumeNa(g.rounding) : ''].filter(Boolean).join('・')
+          + '）に 合わせず そのままに しました。';
+      }
+    }
     if (g.templateId) v.template_id = g.templateId;
     /* ★列は 引き継がない★（2026-09-09）
        ＝「はい」を 押していた頃は「前回と 同じ列で」で よかったが、
@@ -1266,19 +2298,38 @@
         && !String((l && l.price) || '').trim();
     });
     var hikiL = 0, hikiD = 0;
-    if (kara && g.lines && g.lines.length) {
-      v.lines = g.lines.map(function (l) { return Object.assign(blankLine(), l); });
-      hikiL = v.lines.length;
+    /* ★相手を 選び直して 前の 相手の 行を 外した 時は、残った（直した）行の 後ろに この相手の 前回を 足す★
+       （taiketsu S5＝前は 1行でも 残ると この相手の 明細が 入らなかった）。ふだんは 打ち始めていたら 入れない */
+    /* ★止めて 警告★（taiketsu 2026-10-23 止1＝打った 行の 税で 前回の 行を 読むと 足した 行の 金額の 意味が 変わる
+       （A社 税込み 50000 → C社 前回 税抜き 5000 を 足すと 合計 51,700 が 47,000）。
+       ⇒ 打った 行が 残り、前回と 税の 入れ方（か 端数）が 違う 時は 前回の 明細・控除を 足さず、そう 言う。同じなら 今まで通り 足す */
+    var tasu = !!S.oiToki && !zeiChigau;
+    /* ★控除は 円の 額＝税の 入れ方に 関わらない★＝税が 違っても 前回の 控除は 今まで通り 足す（taiketsu ⑦ 止1・
+       前は 控除まで 黙って 落ち、ご請求金額が 控除の 分 多く なった）。止めて 言うのは 前回の 明細が 在る 時だけ */
+    var tasuD = !!S.oiToki;
+    if (S.oiToki && zeiChigau && g.lines && g.lines.length) {
+      var pNm = ((partnerById(v.partner_id) || {}).data || {}).name || 'この相手';
+      zeiTome += pNm + 'の 前回の 明細は 金額の入れ方が 違う（' + (tomeTax ? zeiNa(g.taxMode) : marumeNa(g.rounding)) + '）ので 足していません。';
     }
-    if (kara && g.deductions && g.deductions.length && !(v.data.deductions || []).length) {
-      v.data.deductions = g.deductions.map(function (x) {
+    var ireL = [], ireD = [];
+    if ((kara || tasu) && g.lines && g.lines.length) {
+      ireL = g.lines.map(function (l) { return Object.assign(blankLine(), l); });
+      v.lines = kara ? ireL : v.lines.filter(gyoAru).concat(ireL);
+      hikiL = ireL.length;
+    }
+    if ((kara || tasuD) && g.deductions && g.deductions.length && (tasuD || !(v.data.deductions || []).length)) {
+      ireD = g.deductions.map(function (x) {
         return { name: String((x && x.name) || ''), amount: (x && x.amount) };
       });
-      hikiD = v.data.deductions.length;
+      v.data.deductions = (v.data.deductions || []).concat(ireD);
+      hikiD = ireD.length;
     }
-    S.guessApplied = { subject: !!g.subject, term: !!(g.term && g.term.kind !== 'none'), gensen: !!g.gensen };
+    S.guessApplied = { subject: !!g.subject && jido.indexOf('subject') >= 0, term: !!(g.term && g.term.kind !== 'none'), gensen: !!g.gensen };
     S.guessDone = true;
     recalcDue();
+    jido.push('due');
+    jidoOboe(v, jido);
+    jidoGyoOboe(v, ireL, ireD);                /* ★この 相手から 入れた 物を 覚える★（相手を 変えたら 外す） */
     fillEdit();
     show($('tag-subject'), !!S.guessApplied.subject);
     show($('tag-term'), !!S.guessApplied.term);
@@ -1287,15 +2338,21 @@
        ＝★聞くのは やめる。言うのは やめない★）。 */
     var hiki = [];
     if (g.term && g.term.kind && g.term.kind !== 'none') hiki.push('支払期限');
-    if (g.subject) hiki.push('件名');
-    if (g.templateId) hiki.push('紙の様式');
+    if (g.subject && jido.indexOf('subject') >= 0) hiki.push('件名');
+    /* ★紙の様式は 設定が 決める（tplSync）★＝前回と 同じに なった時だけ「引き継いだ」と 言う */
+    if (g.templateId && g.templateId === v.template_id) hiki.push('紙の様式');
     if (wantGensen) hiki.push('源泉徴収');
+    /* ★税・端数を 会社の 既定と 違う 物に した 時も 言う★（taiketsu 止2＝黙って 税込みに しない） */
+    if (jido.indexOf('tax') >= 0 && v.tax_mode !== settings().taxMode) { hiki.push('金額の入れ方（' + zeiNa(v.tax_mode) + '）'); S.zeiItta = true; }
+    if (jido.indexOf('round') >= 0 && v.rounding !== settings().rounding) { hiki.push('消費税の 端数の 扱い（' + marumeNa(v.rounding) + '）'); S.zeiItta = true; }
+    if (zeiTome) S.zeiItta = true;
     if (hikiL) hiki.push('明細 ' + hikiL + '行');
     if (hikiD) hiki.push('控除 ' + hikiD + '行');
     box('edit-ok', (g.no ? '前回（No.' + g.no + '）と 同じで 用意しました' : '前回と 同じで 用意しました')
       + (hiki.length ? '＝' + hiki.join('・') : '')
       + (hikiL ? '。金額を 確かめてください（要らない行は × で 消せます）。'
-        : '。明細を 打てば 出せます（直したい所は「細かく決める」から）。'));
+        : '。明細を 打てば 出せます（直したい所は「細かく決める」から）。')
+      + (zeiTome ? '\n' + zeiTome : ''));
   }
 
   /* ★いつでも 触れる★（2026-09-09 司さん「代行請求書のように いつでも編集できるように」
@@ -1536,7 +2593,10 @@
     drawKind();
     S.cur = Object.assign(blankInvoice({ docType: 'invoice' }), draft);
     S.cur.data = Object.assign({}, draft.data || {});
-    if (!S.cur.data.cols) S.cur.data.cols = COLS.normalizeSpec(settings().cols || TPL.getOrDefault(settings().template).cols);
+    if (S.cur.data.cols && !S.cur.data.colsTpl) {
+      /* ★見積の列は 見積の様式の 為の物★（様式が 同じなら そのまま 持っていく） */
+      S.cur.data.colsTpl = q.template_id || settings().template;
+    }
     S.guessDone = true;              // ★見積から当てたので「前回と同じで作りますか？」は出さない
     S.dirty = true;
     return loadList().then(function () {
@@ -1564,6 +2624,8 @@
     drawKind();
     S.cur = Object.assign(blankInvoice({ docType: draft.doc_type }), draft);
     S.cur.data = Object.assign({}, draft.data || {});
+    /* ★写した列は 元の紙の 様式の 為の物★（様式が 同じなら 同じ列で 出る） */
+    if (S.cur.data.cols && !S.cur.data.colsTpl) S.cur.data.colsTpl = src.template_id || settings().template;
     S.guessDone = true;               // 中身は もう写してある＝「前回と同じで作りますか」は出さない
     S.dirty = true;
     return loadList().then(function () {
@@ -1604,15 +2666,31 @@
     /* ★消費税額を区分して書けるのは「請求の全額を受け取った時」だけ★
        一部だけの紙で按分すると、★紙に嘘の消費税額が載る★（国税庁 No.7124 は
        「区分して記載されている」時の扱いなので、書けない物を書かない）。 */
-    var total = (v.totals && Number(v.totals.grandTotal)) || 0;
+    /* ★「全額」は 相手が 実際に 払う 額（gakuOf＝源泉の 後）で 判じる★（司さん 10-24「法律的に最適解で」）
+       ＝源泉の ある 1通は 源泉を 引いた 額が 振り込まれる（源泉は 払う側が 国へ 納める・所得税法 204条・212条）。
+         前は 源泉の 前の 額と 比べていたので、全部 受け取っても「全額」に ならなかった。源泉の 無い 1通は 今までと 同じ。 */
+    /* ★2026-10-24 その 紙の ご請求金額（刷った 繰越 込み・源泉と 控除の 後＝相手が その 紙で 払うべき 額）と 比べる★
+       ＝繰越を 含む 紙（66,000）に 66,000 払われたら 全額。kurikoshi＝その 紙に 刷った 前回からの 繰越 */
+    var total = kamiGakuOf(v) || 0;
+    var kurikoshi = (kamiGakuOf(v) || 0) - (gakuOf(v) || 0);
     var taxTotal = (v.totals && Number(v.totals.taxTotal)) || 0;
-    var whole = (total > 0 && Number(rc.amount) === total && taxTotal > 0);
+    /* ★2つの 判定を 分ける★（taiketsu 10-24 止1）
+       zengaku … 払う 額を 全部 受け取ったか ＝★源泉の 注記は これだけで 決める★
+       whole   … その上で 消費税額を 区分して 書けるか（消費税 0 の 免税の 相手は 書く 物が 無い）
+       前は 2つを 1つに していたので、免税の 相手で 全部 受け取っても「源泉徴収税額 X円 差引」が 出なかった。 */
+    var zengaku = (total > 0 && Number(rc.amount) === total);
+    var whole = (zengaku && taxTotal > 0);
+    var gen = (pi.gensen && pi.gensen.on) ? Number(pi.gensen.amount) || 0 : 0;
     return Object.assign({}, pi, {
       docKind: 'receipt',
       receipt: {
         no: no, ymd: rc.ymd, amount: Number(rc.amount), method: rc.method || '',
         note: (v.data && v.data.subject) || '',
         taxTotal: taxTotal, taxSeparate: whole,
+        /* ★全額の 時は 差し引いた 源泉を 添える★（紙の 言葉は 請求書と 同じ「源泉徴収税額」） */
+        gensen: zengaku ? gen : 0,
+        /* ★全額の 時は 前回からの 繰越を 分けて 書く★＝消費税額は この 紙の 今回の 1通分だけ（前の 月の 分は 前の 月の 紙に 書いてある） */
+        kurikoshi: whole ? kurikoshi : 0,
       },
     });
   }
@@ -1725,15 +2803,30 @@
     show(card, on);
     if (!on) return;
 
+    /* ★2026-10-24 帳簿 1つ（choubo）から 出す★＝上の 合計も 下の 行も 同じ 数（止4）
+       この 1通の 額（gakuOf）・この 1通に 充てた 入金（どの 入金から 何円）・残り。 */
     var st = payStateOf(v);
-    var rows = '<div class="tot-r"><span class="tot-l">請求額</span><span class="tot-v">' + yen(st.total) + ' 円</span></div>';
+    var tsuki = function (inv) { var d = String((inv && inv.issue_ymd) || ''); return /^\d{4}-\d{2}/.test(d) ? (d.slice(0, 4) + '年' + Number(d.slice(5, 7)) + '月') : ''; };
+    var rows = '<div class="tot-r"><span class="tot-l">請求額（この1通）</span><span class="tot-v">' + yen(st.total) + ' 円</span></div>';
     if (st.paid === null) {
       // ★読めなかった＝0円と書かない★
-      rows += '<div class="tot-r"><span class="tot-l">入っている合計</span><span class="tot-v">（未確認）</span></div>'
-        + '<div class="tot-r tot-g"><span class="tot-l">残り</span><span class="tot-v">（未確認）</span></div>';
+      rows += '<div class="tot-r"><span class="tot-l">この1通に充てた入金</span><span class="tot-v">（未確認）</span></div>'
+        + '<div class="tot-r tot-g"><span class="tot-l">残り</span><span class="tot-v">（未確認）</span></div>'
+        + (st.voidWarn ? '<p class="hint err">' + esc(VOIDWARN) + '</p>' : '');   /* ★止めた 訳を 返金を 直す 場所で 言う★ */
     } else {
-      rows += '<div class="tot-r"><span class="tot-l">入っている合計</span><span class="tot-v">'
+      rows += '<div class="tot-r"><span class="tot-l">この1通に充てた入金</span><span class="tot-v">'
         + yen(st.paid) + ' 円' + (st.count ? '（' + st.count + '回）' : '') + '</span></div>';
+      /* ★どの 入金から 何円★（別の 紙に 記録した 入金から 充てた 時は その 紙も 言う） */
+      (st.alloc || []).forEach(function (a) {
+        var on = choubo().invById[a.rc.invoice_id];
+        rows += '<div class="hint pay-ate">' + esc(a.rc.ymd || '日付なし') + ' の入金から '
+          + (a.amount < 0 ? '− ' : '') + yen(Math.abs(a.amount)) + ' 円'
+          + (on && on.id !== v.id ? '（' + esc(tsuki(on)) + 'の紙 ' + esc(on.no || '') + ' に記録した入金）' : '') + '</div>';
+      });
+      if (st.credit) {
+        rows += '<div class="tot-r"><span class="tot-l">' + (st.credit > 0 ? 'マイナスの請求書で差し引いた額' : 'ほかの請求書から差し引いた額')
+          + '</span><span class="tot-v">' + yen(Math.abs(st.credit)) + ' 円</span></div>';
+      }
       rows += st.remain < 0
         ? '<div class="tot-r tot-g"><span class="tot-l">過入金</span><span class="tot-v">' + yen(-st.remain) + ' 円</span></div>'
         : '<div class="tot-r tot-g"><span class="tot-l">残り</span><span class="tot-v">' + yen(st.remain) + ' 円</span></div>';
@@ -1749,8 +2842,15 @@
       host.innerHTML = '<p class="hint">まだ入金の記録がありません。下の欄から1回ぶんずつ足します（'
         + '分けて払われた時は、そのぶん行が増えます）。</p>';
     } else {
+      var cb = choubo();
       host.innerHTML = list.map(function (r) {
         var neg = Number(r.amount) < 0;
+        /* ★倉庫の 記録 そのもの★の 行。帳簿で 別の 紙へ 充てた 分が あれば 添える（止4） */
+        var hoka = ((cb.byRc && cb.byRc[r.id]) || []).filter(function (x) { return x.inv.id !== v.id && x.amount; });
+        var soe = hoka.map(function (x) {
+          return 'この入金のうち ' + yen(Math.abs(x.amount)) + ' 円を ' + tsuki(x.inv) + 'の紙（' + (x.inv.no || '番号なし') + '）'
+            + (x.amount < 0 ? 'から戻しました' : 'へ充てました');
+        }).join('／');
         return '<div class="pay-row"><span class="pay-main">'
           + '<span class="pay-l1">'
           + '<span class="pay-d">' + esc(r.ymd || '日付なし') + '</span>'
@@ -1759,6 +2859,7 @@
           + (neg ? '<span class="pay-w">返金</span>' : '')
           + '</span>'
           + (r.memo ? '<span class="pay-memo">' + esc(r.memo) + '</span>' : '')
+          + (soe ? '<span class="pay-memo pay-ate-r">' + esc(soe) + '</span>' : '')
           + '</span>'
           /* ★この1回ぶんの領収書★（棚は増やさない＝この行がそのまま1枚になる）
              返金の行には出さない（受け取っていない物の領収書を作らせない）。 */
@@ -1989,6 +3090,9 @@
         var i = +b.getAttribute('data-del');
         S.cur.lines.splice(i, 1);
         if (!S.cur.lines.length) S.cur.lines.push(blankLine());
+        /* ★打った 行が 無くなったら「打った 明細が 在る／残っているので…」の 知らせは 嘘に なる★＝消す（任意4） */
+        var okEl = $('edit-ok');
+        if (!S.cur.lines.some(gyoAru) && okEl && /打った 明細が (在る|残っている)ので/.test(okEl.textContent || '')) box('edit-ok', '');
         S.dirty = true;
         jidoYoyaku();
         renderLines(); recalc(); lockInputs();
@@ -2083,14 +3187,20 @@
   function currentCarry() {
     var v = S.cur; if (!v) return null;
     if (v.snapshot && v.snapshot.carry) return CARRY.fromSnapshot(v.snapshot.carry);
+    /* ★発行済みで 繰越を 写していない 紙は 繰越を 出さない★＝出した 時の 顔の まま（taiketsu 4回目 止C）
+       前は 開き直す たびに 数え直し、後から 繰越を「入」に すると 出した 9月の 紙が 99,000・後の 紙を「前回」と 刷った */
+    if (v.status && v.status !== 'draft') return null;
+    /* ★見積書に 請求書の 繰越を 乗せない★（帳簿は 請求書だけ＝見積には 入金が 無い・taiketsu 5回目 別件） */
+    if ((v.doc_type || 'invoice') !== 'invoice') return null;
     if (!carryOn()) return null;
     var t;
     try { t = currentTax(); } catch (e) { return null; }
     if (!t || !t.ok) return null;
-    var prev = CARRY.prevOf(S.invoices, v);
-    /* ★入金が読めていない時は null のまま渡す（0にしない＝紙に「未確認」と出る）★
-       S.receipts が唯一の正：null＝読めていない／[]＝読めた上で0件。作り分けを2か所に持たない。 */
-    return CARRY.compute({ thisTotal: t.grandTotal, prev: prev, receipts: S.receipts });
+    /* ★取引先ごとの 帳簿 1つから 数える★（choubo の 註・2026-10-24）
+       ・入金が 読めていない 時は「未確認」（0 に しない＝紙に「未確認」と 出る）
+       ・1通の 額は gakuOf（源泉の 後＝源泉は 相手が 国へ 納める・所得税法 204条・212条＝払い残りでは ない）
+       ・★発行済みの 紙は snapshot の 繰越の まま★（上の fromSnapshot で 返る＝書き換えない） */
+    return carryFromLedger(v, t.grandTotal);
   }
 
   /** 「◯年◯月分」の説明。★空なら 請求日の前月から自動で入る事を言う★ */
@@ -2375,6 +3485,7 @@
   function openRowsSetting() {
     fillSettings();
     goScreen('scr-set');
+    showSetSeg('tpl');   /* ★行数は「テンプレート」の 中★（2026-10-23 ⑥ 設定を 3つに 分けた） */
     var box = $('set-more');
     if (box) box.open = true;
     var el = $('s-rows');
@@ -2436,9 +3547,11 @@
     if (t && t.kind) {
       v.data.term = { kind: t.kind, n: t.n || 0 };
       recalcDue();
+      jidoOboe(v, ['term', 'due']);   /* ★相手の 既定から 入れた＝相手を 変えたら 外す★（2026-10-23） */
     }
     // ★源泉の対象かは相手が決める＝取引先の既定を入れておく（打つ前に聞かない）
-    if (!v.id) v.data.gensen = partnerGensen(v.partner_id);
+    /* ★自動で しまわれて id が 付いた 新しい 下書きも 同じ★（前は 前の 相手の 源泉が 残った・2026-10-23） */
+    if (!v.id || jidoNoCur(v)) { v.data.gensen = partnerGensen(v.partner_id); jidoOboe(v, ['gensen']); }
   }
 
   /* ── 紙・Excel ── */
@@ -2700,17 +3813,30 @@
          知らせも 出さない（人が 押していないので「保存しました」は 余計）。 */
     var t = null;
     try { t = recalc(); } catch (e) { return; }
-    v.lines = cleanLines(v.lines);
+    /* ★画面の 行は 詰めない★（2026-10-23 taiketsu 止2＝ここで S.cur.lines から 空行を 抜くと、画面は 描き直さないので
+       行の 番号（data-i）が ずれ、空行に 打つと 次の 行が 黙って 消え／3行目に 打つと TypeError で しまえなかった）。
+       ⇒ ★送る 物だけ 詰めた 写し★にする（打っている 欄の カーソルも 奪わない） */
     v.totals = (t && t.ok) ? totalsOf(t) : {};
+    var okuru = Object.assign({}, v, { lines: cleanLines(v.lines) });
     var okuttaCur = S.cur;
+    var okuttaKata = hozonKata(v);    /* ★送った 時の 中身★（返事を 待つ 間に 打った 字を 見分ける・taiketsu 止A） */
     if (v.id && S.kieta && S.kieta[v.id]) return;
+    /* ★発行の 返事を 待つ 1通は しまわない★（2026-10-25）＝下書きの まま 送ると 発行済みに 当たって 凍結に 拒まれ（偽の「取り消して 作り直して」）、
+       id の 無い 1通なら 同じ 番号で 2通目を 作ろうとした。待つ 間に 打った 字は 発行の 返事の 後に 予約し直す（issue） */
+    if (hakkoMachi(S.cur)) return;
     try {
-      S.hozonChu = S.store.invoices.saveDraft(v);
+      S.hozonChu = S.store.invoices.saveDraft(okuru);
       S.hozonChu.then(function (r) {
         if (r && r.ok) {
           /* ★id は 送った 1通に 付ける★（返事の 前に 別の 1通を 見ても、戻った 時に id が 無いと 同じ番号で 2通目を 作ろうとした・taiketsu 10-23） */
           if (okuttaCur && !okuttaCur.id) okuttaCur.id = r.id;
-          if (S.cur && S.cur === okuttaCur) S.dirty = false;
+          if (okuttaCur) okuttaCur._shimatta = okuttaKata;   /* ★倉庫に 入った 中身★（発行を 断られた 時に 積むかを 見る） */
+          /* ★返事を 待つ 間に 打った 字は まだ 倉庫に 無い★（taiketsu 止A）＝送った 時と 同じ 中身の 時だけ 印を 落とす。
+             違えば 印を 残して 次の 自動の しまいに 任せる */
+          if (S.cur && S.cur === okuttaCur) {
+            if (hozonKata(S.cur) === okuttaKata) S.dirty = false;
+            else jidoYoyaku();
+          }
           ochiKesu(okuttaCur); return;
         }
         ochita(okuttaCur, r);
@@ -2825,14 +3951,21 @@
     var v = collect();
     if (!v) { box('edit-err', '入力の画面と 中身が 合っていないので 保存しませんでした。一覧の「修正」から 開き直してください。'); return Promise.resolve(); }
     if (v.id && S.kieta && S.kieta[v.id]) { box('edit-err', 'この下書きは 削除しました。'); return Promise.resolve(); }
+    /* ★発行の 返事を 待つ 1通は 下書きで 送らない★（taiketsu 10-25 止2＝発行済みに 当たって 偽の「取り消して 作り直して」／
+       id の 無い 1通は 偽の「番号は 既に 使われています」）。打った 字は 発行の 返事の 後に 自動で しまう */
+    if (hakkoMachi(S.cur)) { box('edit-err', '発行の 返事を 待っています。直した 内容が あれば、返事の 後に 保存します。'); return Promise.resolve(); }
     var t = recalc();
+    var motoGyo = (v.lines || []).length;
     v.lines = cleanLines(v.lines);
+    /* ★詰めたら その場で 描き直す★（行の 番号を 中身と 合わせる・taiketsu 止2）＝押したのは「保存」なので 打っている 欄は 無い */
+    if (v.lines.length !== motoGyo) renderLines();
     v.totals = (t && t.ok) ? totalsOf(t) : {};
     if (!v.issue_ymd) { box('edit-err', '請求日を入れてください（下書きでも日付は要ります）。'); return Promise.resolve(); }
     if (!v.no) { box('edit-err', '請求番号が空です。「自動」に戻すか、自分で番号を入れてください。'); return Promise.resolve(); }
     box('edit-err', '');
     box('edit-ok', '');               // ★前の「保存しました」を 残さない★（落ちた時に 並んで 出ていた・taiketsu 10-14）
     var okuttaCur = S.cur;
+    var okuttaKata = hozonKata(v);    /* ★送った 時の 中身★（返事を 待つ 間に 打った 字を 見分ける・taiketsu 止1） */
     var pr = Promise.resolve().then(function () { return S.store.invoices.saveDraft(v); });
     S.hozonChu = pr;
     return pr.then(function (r) {
@@ -2843,9 +3976,15 @@
       }
       ochiKesu(okuttaCur);
       if (okuttaCur && !okuttaCur.id) okuttaCur.id = r.id;   // ★id は 送った 1通に 付ける★（taiketsu 10-23）
+      if (okuttaCur) okuttaCur._shimatta = okuttaKata;
       if (S.cur !== okuttaCur) return;   // 返事の 前に 別の 1通を 開いた＝今の 画面には 付けない
       S.cur.id = r.id;
-      S.dirty = false;
+      /* ★返事を 待つ 間に 打った 字は まだ 倉庫に 無い★（taiketsu 止1）＝送った 時と 同じ 中身の 時だけ
+         「しまえた」に して 終えた 印を 付ける。違えば 打ちかけの まま（自動の しまいに 任せる） */
+      if (hozonKata(S.cur) === okuttaKata) {
+        S.dirty = false;
+        owattaOboe(S.cur);             /* ★人が 保存を 終えた 1通★（次の「入力」は 白紙・owattaNoMama） */
+      } else { S.dirty = true; jidoYoyaku(); }
       /* ★言葉は 状態なりに★（2026-09-09 いつでも直せるように したので
          発行済みを 直した時に「下書きを保存しました」と 出ると 嘘に なる）。 */
       box('edit-ok', (S.cur.status === 'issued' ? '直した内容を 保存しました（番号 ' + (S.cur.no || '') + ' は そのままです）。'
@@ -2880,7 +4019,9 @@
       inv: Object.assign({}, v, { lines: cleanLines(v.lines) }),
       /* ★打たれたそのままの行も渡す★＝品名だけ空の行を「黙って捨てる」のをやめる */
       rawLines: v.lines,
-      partner: partnerById(v.partner_id),
+      /* ★発行は 生きている 相手だけ★（taiketsu 10-23 止1）＝partnerById は 消した 相手の 名前も 返す（一覧・紙の 名前用）。
+         消した 相手の 下書きは 前と 同じく「取引先がマスタに見つかりません」で 止める（番号も 使わない）。 */
+      partner: ptLive(v.partner_id),
       org: { data: S.org || {} },
     });
     if (chk.ok) return null;
@@ -2925,7 +4066,11 @@
           : (kl2 + 'の一覧が読めていないので発行できません（前回の請求からの繰越を数えられないため）。一覧の「もう一度読み込む」を押してから、もう一度お試しください。'));
       return Promise.resolve();
     }
-    var p = partnerById(v.partner_id);
+    /* ★止めて 警告★（司さん 10-25）＝取り消した 紙の 入金と 返金が 両方 ある 取引先は、繰越を 数えられないので 発行しない */
+    var cw = currentCarry();
+    if (cw && cw.voidWarn) { box('edit-err', cw.why); return Promise.resolve(); }
+    /* ★発行は 生きている 相手だけ★（taiketsu 10-23 止1・上の issueBlockReason と 同じ 判じ） */
+    var p = ptLive(v.partner_id);
     var chk = DOC.validateInvoice({ inv: Object.assign({}, v, { lines: cleanLines(v.lines) }), rawLines: v.lines, partner: p, org: { data: S.org || {} } });
     if (!chk.ok) { box('edit-err', chk.errors.join('\n')); box('edit-warn', ''); return Promise.resolve(); }
     box('edit-warn', chk.warnings.join('\n'));
@@ -2954,11 +4099,56 @@
     /* ★返事の 後は 送った 1通（hakko）に 付ける★（返事の 前に 一覧で 別の 1通を 開くと、その 1通に 発行の 番号が 付き、
        発行済みの 明細が 別の 1通の 明細で 上書きされた・taiketsu 10-23） */
     var hakko = S.cur;
-    return S.store.invoices.issue(row, at).then(function (r) {
-      if (!r.ok) { box('edit-err', '発行できませんでした（' + r.reason + '）'); return; }
+    var hakkoKata = nakamiKata(v);    /* ★送った 時の 中身★（taiketsu 止1） */
+    /* ★★発行と 自動の しまいを ぶつけない★★（2026-10-25 指示役・実測 3つ）
+       ①打ち直して すぐ 発行＝予約の しまいが 発行済みに 下書きで 当たり、凍結に 拒まれて 偽の「取り消して 作り直して」が 残った
+       ②id の 無い 1通を すぐ 発行＝予約の しまいが 同じ 番号で 2通目を 作ろうとして 偽の「この番号は 既に 使われています」
+       ③最初の しまいの 返事待ちに 発行＝下書きと 発行済みの ★2通★（番号が 1つ 進む）＝後で 下書きを 発行すると 二重の 請求
+       ⇒ 予約を 消す・発行の 返事まで この 1通の 自動の しまいを 止める・しまいの 返事を 待って、返った id で 発行する。
+       ★2度 押しも 通さない★（返事の 前の 2度目は id が 無く、番号を 進めて 2通 発行した） */
+    if (S.hakkoChu) { box('edit-err', '発行の 返事を 待っています。少し 待ってから、もう一度 お試しください。'); return Promise.resolve(); }
+    if (jidoTimer) { clearTimeout(jidoTimer); jidoTimer = null; }
+    S.hakkoChu = hakko;
+    S.hakkoNo = row.no;
+    var maeDirty = S.dirty;           /* 押した 時に 打ちかけ だったか */
+    var owari = function () {
+      if (S.hakkoChu === hakko) { S.hakkoChu = null; S.hakkoNo = ''; }
+      /* 一覧に 出した「返事を 待っています」は 返事が 来たら 消す（断られた 時は 一覧を 読み直さないので 残り続けた・taiketsu 5回 止2） */
+      var le = $('list-err');
+      if (le && /発行の 返事を 待っています/.test(le.textContent)) box('list-err', '');
+    };
+    /* ★待つ 間に 打った 字を 黙って 捨てない★（taiketsu 10-25 止1）＝この 1通の 自動の しまいは 止めて あるので、
+       返事の 前に 別の 1通へ 移ると 誰も しまわなかった。今の 1通なら 予約し直す・別の 1通なら 打った 値ごと
+       「まだ 保存されていません」に 残す（開き直すと その 値で 戻る。合計は その 1通を 開いて 数え直すので ここでは しまわない） */
+    var nokosu = function (why, kakita) {
+      if (S.cur === hakko) { if (S.dirty) jidoYoyaku(); return; }
+      /* 倉庫に 無い 中身か＝発行できた 時は 発行で 送った 中身と、断られた 時は 最後に しまえた 中身と 比べる
+         （打っていない 1通に 偽の「まだ 保存されていません」を 積まない・taiketsu 10-25 任意1） */
+      var mada = nakamiKata(hakko) !== hakkoKata || (!kakita && maeDirty && hozonKata(hakko) !== hakko._shimatta);
+      if (mada) ochita(hakko, { ok: false, reason: why });
+    };
+    return Promise.resolve(S.hozonChu).then(function () { return null; }, function () { return null; }).then(function () {
+      if (!row.id && hakko.id) row.id = hakko.id;   /* ★しまいが 付けた id★＝その 下書きを 発行済みに する（2通に しない） */
+      return S.store.invoices.issue(row, at);
+    }).then(function (r) {
+      owari();
+      if (!r || !r.ok) {
+        box('edit-err', '発行できませんでした（' + ((r && r.reason) || '理由不明') + '）');
+        nokosu('発行できなかったため', false);   /* 待つ 間に 打った 字は 下書きと して しまう */
+        return;
+      }
       hakko.id = r.id; hakko.no = r.no; hakko.status = 'issued'; hakko.issued_at = at;
       ochiKesu(hakko);                 // ★発行で 中身も 倉庫に 入った＝「まだ 保存されていません」を 残さない★（taiketsu 10-14）
       hakko.snapshot = snap; hakko.totals = row.totals;
+      /* ★発行を 終えた 1通★（中身は 発行で 全部 倉庫に 入った＝次の「入力」は 白紙・owattaNoMama） */
+      /* ★返事を 待つ 間に 打った 字は 発行の 中に 入っていない★（taiketsu 止1）＝送った 時と 同じ 中身の 時だけ
+         終えた 印を 付けて「しまえた」に する。違えば 打ちかけの まま＝自動の しまいで 倉庫へ 送る */
+      var onaji = nakamiKata(hakko) === hakkoKata;
+      if (onaji) {
+        owattaOboe(hakko);
+        if (S.cur === hakko) S.dirty = false;
+      } else if (S.cur === hakko) { S.dirty = true; jidoYoyaku(); }
+      if (S.cur !== hakko) nokosu('発行の 返事を 待つ 間に 直したため', true);
       box('edit-ok', '請求書 ' + r.no + ' を発行しました。'
         + (r.bumped ? '（同じ番号が先に使われていたので ' + r.bumped + ' つ進めました）' : '')
         /* ★固まるのは 番号だけ★（中身は あとからでも 直せる） */
@@ -2966,12 +4156,17 @@
       /* ★次の 一手を その場に 出す★（2026-09-10）＝一覧へ 歩かせない */
       var ai = $('after-issue'); if (ai) ai.style.display = '';
       return loadList({ ato: DOC.docLabel(v.doc_type || 'invoice') + ' ' + r.no + ' の 発行は できています（一覧に 出るのは 読み込めてから です）。' }).then(function () { if (S.cur === hakko) fillEdit(); });
+    }, function (e) {
+      owari();
+      box('edit-err', '発行できませんでした（' + ((e && e.message) || '理由不明') + '）');
+      nokosu('発行できなかったため', false);
     });
   }
 
   function voidIt() {
     atoKesu();
     var v = S.cur;
+    if (hakkoMachi(v)) { box('edit-err', '発行の 返事を 待っています。少し 待ってから、もう一度 お試しください。'); return Promise.resolve(); }
     if (!DOC.canVoid(v)) return Promise.resolve();
     if (!global.confirm('請求書 ' + (v.no || '') + ' を取り消しますか？\n（中身は残ります。番号は他で使えません）')) return Promise.resolve();
     return S.store.invoices.voidIt(v.id, new Date().toISOString()).then(function (r) {
@@ -2986,6 +4181,8 @@
   function removeDraft() {
     atoKesu();
     var v = S.cur;
+    /* ★発行の 返事を 待つ 1通は 消さない★（消すのが 後に 当たると 0行で「消せた」に なり、消した 印で その 発行済みが 直せなくなった・taiketsu 3回 止1） */
+    if (hakkoMachi(v)) { box('edit-err', '発行の 返事を 待っています。少し 待ってから、もう一度 お試しください。'); return Promise.resolve(); }
     if (!(DOC.canDelete(v) && v.id)) return Promise.resolve();
     if (!global.confirm('この下書きを削除しますか？')) return Promise.resolve();
     /* ★消した 下書きが 生き返らない様に★（2026-10-14 taiketsu）
@@ -3040,6 +4237,7 @@
       if (noteId) setText(noteId, '');            /* 説明は 札の中に 書いてある＝2回 言わない */
       /* ★今の紙を 1行で★（2026-09-10＝6枚の 絵は 畳んだ 中） */
       setText('s-tpl-now', TPL.getOrDefault(current).label);
+      drawTplPtList();
       return;
     }
     host.innerHTML = TPL.list().map(function (t) {
@@ -3058,29 +4256,18 @@
 
   /* ═══ 列の編集（★どんな項目にも対応する所★） ═══ */
   function editCols() {
-    /* ★この相手だけの列★を 作ってあれば、取引先の画面では そちらを直す
-       （★2か所に 同じ列を持たない★＝直した先が どこか 画面に書いてある） */
+    /* ★★列の 直し場は 設定だけ★★（2026-10-24 taiketsu 叩き4回目 止1）
+       ＝直すのは ★会社の列★ か ★この相手だけの列★ の どちらか。★今の1通（S.cur）には 書かない★。
+       ★前の作り★ … 「設定の 画面で ない 時は 今の1通の data.cols を 返す（無ければ 書く）」だった。
+         ところが 設定の 下タブは fillSettings を ★goScreen より 先★に 呼ぶ（入力の 画面が まだ active）ので、
+         設定へ 行くだけで ★今の1通に 列が 書き込まれ★、A社（相手だけの列＝現場名つき）で 作り始めて
+         設定へ 1度 行き、戻って B社を 選ぶと ★B の紙に A の「現場名」★（発行で 写しに 固まる）。
+         列を 直す 部品（col-list）は 設定にしか 無い＝入力の 画面から ここへ 来る 道は もう 無い。
+       ⇒ 画面を 見て 分けるのを やめ、★設定で 選んでいる 相手★だけで 決める。
+         今の1通の 紙の列は colsOf が その場で 決める（相手 → 会社 → 様式）。 */
     var pid = $('s-partner') && $('s-partner').value;
     var pOwn = pid ? SCOPE.partnerPaper(partnerById(pid)) : {};
-    if (pOwn.cols && pOwn.cols.items && pOwn.cols.items.length
-      && $('scr-set') && $('scr-set').classList.contains('active')) {
-      return pOwn.cols;
-    }
-    /* ★設定の 画面では 会社の 列を 触る★（司さん 2026-09-05
-         「選んだテンプレによって スクロールした下の カスタムするところは 変わらないかん」）
-       ★前の作り★＝設定でも 作りかけの1通(S.cur)の 列を 返していた。
-         だから 設定で 様式を 変えても ★下の カスタムは 1文字も 変わらなかった★
-         （2026-09-05 実測＝std1/elegant/koujo の3つとも 同じ7列だった。
-           koujo は「項目・金額」の2列のはず）。
-       ⇒ 設定＝会社の 既定（これから作る物に効く）／入力＝その1通、と ★触る相手を 分ける★。
-         （上の 取引先の分岐が 先に 効くのは そのまま＝相手ごとの 列が いちばん 強い） */
-    var setNow = $('scr-set') && $('scr-set').classList.contains('active');
-    // 編集できるのは下書きだけ。発行済みは写しの並びを見せるだけ。
-    var v = S.cur;
-    if (!setNow && v && !locked()) {
-      if (!v.data.cols) v.data.cols = COLS.normalizeSpec(colsOf(v));
-      return v.data.cols;
-    }
+    if (pOwn.cols && pOwn.cols.items && pOwn.cols.items.length) return pOwn.cols;
     var s = settings();
     if (!S.org) S.org = {};
     if (!S.org.invoiceCols) S.org.invoiceCols = COLS.normalizeSpec(s.cols || TPL.getOrDefault(s.template).cols);
@@ -3901,6 +5088,7 @@
     $('s-bank').value = s.bank;
     drawBankRows(bankRows().length);
     $('s-carry').checked = s.carry;
+    $('s-voidpay').checked = s.voidPay === 'count';
     $('s-rows').value = (s.paperRows === null ? '' : s.paperRows);
     $('s-dedrows').value = (s.deductRows === null ? '' : s.deductRows);
     /* ★紙の書き方（会社ごと）★＝空なら 様式の既定（何も選ばなければ 今までどおり） */
@@ -3971,12 +5159,11 @@
     rowsHint();
     settingsHint();
 
-    fillSelect($('s-partner'), [{ v: '', t: '（選んでください）' }].concat(S.partners.map(function (p) {
-      return { v: p.id, t: (p.data && p.data.name) || '(名称未設定)' };
-    })), '');
+    fillPtSelect('');
     fillSelect($('s-pterm'), DOC.PAY_TERMS.map(function (t) { return { v: t.key, t: t.label }; }), 'none');
     fillPartnerForm('');
     renderPtAsk();
+    renderPtCards();   /* ★取引先は 会社ごとの 札★（2026-10-23 ⑥）＝開き直したら 全部 閉じた 姿から（前の 選び箱と 同じ） */
 
     // 様式と列（★会社の既定★。作りかけの1通ではなく、これから作る物に効く）
     drawSetTpl(s.template);
@@ -4014,11 +5201,19 @@
     renderTplSeg('s-tpl', 's-tpl-note', id, function (pick) {
       if (!S.org) S.org = {};
       var mae = settings();
-      if (pick === mae.template) return;                 /* 同じ物を 押した＝何も しない */
+      /* 同じ物を 押した＝列は 何も しない。★ただ「今 これを 選んだ」は 覚える★
+         （前に 別の様式で 出した 相手にも、今 選んだ 様式を 効かせる＝tplFromRireki） */
+      if (pick === mae.template) {
+        S.org.invoiceTemplate = pick;
+        S.org.invoiceTemplateAt = new Date().toISOString();
+        box('col-ok', '「' + TPL.getOrDefault(pick).label + '」で 出します（前に 別の紙で 出した 相手にも この紙を 使います）。');
+        return;
+      }
       var maeCols = mae.cols ? COLS.normalizeSpec(mae.cols) : null;
       var chigau = !!(maeCols && !onajiCols(maeCols, TPL.getOrDefault(mae.template).cols));
       S.org.invoiceTemplate = pick;
       S.org.invoiceCols = COLS.normalizeSpec(TPL.getOrDefault(pick).cols);
+      S.org.invoiceTemplateAt = new Date().toISOString();   /* ★選んだ時＝これより 前の紙の 様式は 当てない★ */
       colsUndo = chigau ? { tpl: mae.template, cols: maeCols } : null;
       drawSetTpl(pick);
       renderColEditor();
@@ -4041,6 +5236,7 @@
     if (!S.org) S.org = {};
     S.org.invoiceTemplate = colsUndo.tpl;
     S.org.invoiceCols = COLS.normalizeSpec(colsUndo.cols);
+    S.org.invoiceTemplateAt = new Date().toISOString();
     colsUndo = null;
     drawSetTpl(S.org.invoiceTemplate);
     renderColEditor();
@@ -4086,7 +5282,8 @@
 
   function ptAskPartner(where) {
     var id = (where === 'set') ? ($('s-partner') && $('s-partner').value) : (S.cur && S.cur.partner_id);
-    return partnerById(id);
+    /* ★消した 取引先には 聞かない★（2026-10-23 ⑤）＝答えても しまう 先が 無い（倉庫の 行は 消してある） */
+    return ptLive(id);
   }
   function ptQs(p) {
     return PTASK.questions({
@@ -4492,6 +5689,7 @@
     }
     /* ★同じ値を2か所で別々に持たない★＝「ぜんぶ見る」も同時に描き直す */
     if ($('s-partner')) fillPartnerForm($('s-partner').value);
+    ptHeads();   /* ★札の 一言も 同じ 値から★（答えた 敬称・紙が 閉じた 札にも すぐ 出る） */
   }
 
   /** ★1問ごとに保存★（倉庫へ書けなければ 画面の値も戻す＝嘘の成功を出さない） */
@@ -4617,6 +5815,9 @@
         if (!pp) return;
         pp.data = pp.data || {};
         pp.data.paper = partnerPaperFromForm(pp.id);
+        /* ★様式を 選び直しても この相手だけの列は 消さない・上書きしない★（2026-10-24 taiketsu 止3）
+           ＝合わない 様式の 紙では 使わない だけ（colsOf ②）。元の様式に 戻すと 手で 作った列が 帰る。
+           知らせは fillPartnerPaper（s-pcols-hint）が 中身どおりに 言う。 */
         fillPartnerPaper(pp);
         renderColEditor();
       };
@@ -4695,10 +5896,43 @@
     var own = !!(pp.cols && pp.cols.items && pp.cols.items.length);
     show($('b-pcols-own'), !own);
     show($('b-pcols-clear'), own);
-    setText('s-pcols-hint', own
-      ? ('この相手だけの列です（' + pp.cols.items.length + '本）。下の「明細の列」で 直せます。')
-      : '今は 会社の既定の列です。');
+    var imaT = p ? templateForPartner(p.id) : st.template;
+    var moto = own ? ptColsTpls(pp) : [];
+    setText('s-pcols-hint', !own ? '今は 会社の既定の列です。'
+      : (moto.indexOf(imaT) >= 0)
+        ? ('この相手だけの列です（' + pp.cols.items.length + '本）。下の「明細の列」で 直せます。')
+        : ('この相手だけの列（' + pp.cols.items.length + '本）は'
+          + (moto.length ? '「' + TPL.getOrDefault(moto[0]).label + '」の 紙の為の 列なので、' : ' どの様式にも 合わないので、')
+          + '今の紙「' + TPL.getOrDefault(imaT).label + '」では 使わず、様式の 列で 出します（消してはいません'
+          + (moto.length ? '。「' + TPL.getOrDefault(moto[0]).label + '」に 戻すと また 使います' : '') + '）。'));
     renderPartnerBanks(p);
+    drawPtTplNow(p);
+  }
+  /** ★この取引先に 今 出る紙を 1行で★（「ぜんぶ見る」を 開かなくても 見える所に 出す）
+   *  （2026-10-23 司さん「会社ごとに 請求書の様式の変えも ちゃんとできるか 分かりにくい」）
+   *  ＝前は 取引先の 紙の様式が「ぜんぶ見る」の 畳みの 中に だけ 在り、
+   *    ★今 どの紙で 出るのか★は どこにも 出ていなかった。 */
+  function drawPtTplNow(p) {
+    drawTplPtList();                      /* 会社の「紙の様式」の 一覧も 合わせる */
+    var row = $('s-pt-tpl-row'); if (!row) return;
+    if (!p) { show(row, false); show($('s-pt-tpl-why'), false); return; }
+    var k = tplKara(p.id);
+    setText('s-pt-tpl-now', k.label);
+    show(row, true);
+    setText('s-pt-tpl-why', k.kara + '。');
+    show($('s-pt-tpl-why'), true);
+  }
+  /** ★会社の「紙の様式」に 取引先ごとの 紙も 並べる★（どこで 変えられるか・今 だれが 別の紙か） */
+  function drawTplPtList() {
+    var el = $('s-tpl-pt'); if (!el) return;
+    var betsu = (S.partners || []).filter(function (p) {
+      var t = SCOPE.partnerPaper(p).template;
+      return t && TPL.get(t);
+    }).map(function (p) {
+      return ((p.data && p.data.name) || '(名称未設定)') + '＝「' + TPL.getOrDefault(SCOPE.partnerPaper(p).template).label + '」';
+    });
+    setText('s-tpl-pt', 'ここは 会社の既定です。取引先ごとに 別の紙にも できます（上の「取引先」で 相手の札を 開く）。'
+      + (betsu.length ? ' 今 別の紙の取引先：' + betsu.join('／') : ' 今は どの取引先も 会社の既定の紙です。'));
   }
   /** この相手だけの列を 作る（★会社の今の列を 写してから 直す★＝白紙から作らせない） */
   function partnerColsOwn(on) {
@@ -4708,12 +5942,27 @@
     p.data.paper = Object.assign({}, p.data.paper || {});
     if (on) {
       var st = settings();
-      p.data.paper.cols = COLS.normalizeSpec(st.cols || TPL.getOrDefault(st.template).cols);
+      /* ★この相手の 今の様式の 列を 写す★（会社の列は 会社の様式の 列＝様式が 同じ時だけ 写す） */
+      var tP = templateForPartner(p.id);
+      p.data.paper.cols = COLS.normalizeSpec((st.cols && st.template === tP) ? st.cols : TPL.getOrDefault(tP).cols);
+      p.data.paper.colsTpl = tP;          /* ★どの様式の 為の列か★（colsOf ②） */
     } else {
       delete p.data.paper.cols;
+      delete p.data.paper.colsTpl;
     }
     fillPartnerPaper(p);
     renderColEditor();
+  }
+
+  /** ★取引先の「様式」の 欄を 開いて 見せる★（「ぜんぶ見る」の 畳みを 開ける） */
+  function ptTplHiraku() {
+    var d = $('pt-all'); if (d) d.open = true;
+    var t = $('s-ptpl'); if (!t) return;
+    global.setTimeout(function () {
+      if (typeof t.scrollIntoView !== 'function') return;
+      try { t.scrollIntoView({ block: 'center' }); } catch (e) { try { t.scrollIntoView(); } catch (e2) { /* 着いている */ } }
+      try { t.focus(); } catch (e3) { /* 端末差 */ }
+    }, 60);
   }
 
   function fillPartnerForm(id) {
@@ -4740,6 +5989,384 @@
     $('b-pt-save').disabled = !on;
   }
 
+  /* ═══ ★設定を 3つに 分ける★（司さん 2026-10-23 ⑥「設定の中身も 代行請求書アプリのように 分かりやすく、
+         会社マスタや 自社情報など ちゃんと 分けろ」）══════════════════════════════
+     手本＝代行請求書の showSettingsSeg（上に 切り替え 3つ・中身は 1つずつ・既定は 相手の 一覧）。
+     ★中の 関数は 1つも 変えていない★＝置き場所を 分けただけ（欄の id も 前のまま）。 */
+  var SET_SEGS = ['torihiki', 'jisha', 'tpl'];
+  function showSetSeg(seg) {
+    if (SET_SEGS.indexOf(seg) < 0) seg = 'torihiki';
+    S.setSeg = seg;
+    Array.prototype.forEach.call(document.querySelectorAll('#scr-set .set-panel'), function (p) {
+      p.classList.toggle('on', p.getAttribute('data-setseg') === seg);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#set-seg .set-seg-b'), function (b) {
+      var on = b.getAttribute('data-setseg') === seg;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  }
+
+  /* ═══ ★取引先は 会社ごとの 札★（司さん 2026-10-23 ⑥・手本＝代行請求書の 会社マスタ）══════════
+     ★前★ 選び箱（s-partner）で 1社ずつ 選んでいた＝★何社 在るか・誰が 居るかが 画面に 出ない★。
+     ★今★ 札を 並べ、押すと 開いて 中で 直す。もう一度 押すと 閉じる（開くのは 1枚だけ）。
+     ★中の 欄は 1組だけ★（#pt-editor）を 開いた 札へ 移す＝札の 数だけ 欄を 作らない
+       （同じ 値を 2か所で 別々に 持たない・前の 関数は そのまま 動く）。
+     ★s-partner は 中で 動く 相手の 印として 残す★（見せない）＝前の 関数は ぜんぶ これを 読む。 */
+  /** 生きている（消していない）取引先だけ */
+  function ptLive(id) {
+    for (var i = 0; i < S.partners.length; i++) if (S.partners[i].id === id) return S.partners[i];
+    return null;
+  }
+  function fillPtSelect(v) {
+    fillSelect($('s-partner'), [{ v: '', t: '（選んでください）' }].concat(S.partners.map(function (p) {
+      return { v: p.id, t: (p.data && p.data.name) || '(名称未設定)' };
+    })), v || '');
+  }
+  /** 閉じた 札の 一言（敬称・この相手だけの紙）＝★決めた 事だけ★ 出す（空なら 何も 出さない） */
+  function ptSub(p) {
+    var d = (p && p.data) || {};
+    var bits = [];
+    var h = d.honor || d.keisho || '';
+    if (h && h !== '（なし）') bits.push(h);
+    var pp = SCOPE.partnerPaper(p);
+    if (pp.template && TPL.get(pp.template)) bits.push(TPL.getOrDefault(pp.template).label);
+    return bits.join('・');
+  }
+  /** 中の 欄を 預かり所へ 戻す（札を 描き直す 前に＝欄ごと 消さない） */
+  function ptPark() {
+    var ed = $('pt-editor'), park = $('pt-park');
+    if (ed && park && ed.parentNode !== park) park.appendChild(ed);
+  }
+  function renderPtCards() {
+    var host = $('pt-cards'); if (!host) return;
+    ptPark();
+    if (!S.partners.length) {
+      host.innerHTML = '<p class="hint">取引先は まだ ありません。下に 会社名を 入れて 足してください。</p>';
+      return;
+    }
+    host.innerHTML = S.partners.map(function (p) {
+      var nm = (p.data && p.data.name) || '(名称未設定)';
+      /* ★消すは 2つの 道★（手本＝代行請求書の 会社マスタ）
+         ・閉じた 札を 左へ 払う → 右に 赤い「削除」
+         ・開いた 中の 一番下「取引先を削除」
+         ★顔は 台帳の「消す（赤）」★（.bdel）＝塗りの 赤は 台帳に 無い。 */
+      return '<div class="pt-co" data-pt="' + esc(p.id) + '">'
+        + '<div class="swipe-action"><button class="bdel swipe-del" type="button" tabindex="-1" data-pt-del="' + esc(p.id) + '">削除</button></div>'
+        + '<div class="swipe-content">'
+        + '<div class="pt-co-hd" role="button" tabindex="0" aria-expanded="false" data-pt-open="' + esc(p.id) + '">'
+        + '<span class="pt-co-name">' + esc(nm) + '</span>'
+        + '<span class="pt-co-sub">' + esc(ptSub(p)) + '</span>'
+        + '<span class="pt-co-caret" aria-hidden="true">▾</span></div>'
+        + '<div class="pt-co-body">'
+        + '<div class="btn-row pt-del-row"><button class="bdel" type="button" data-pt-del="' + esc(p.id) + '">取引先を削除</button></div>'
+        + '</div>'
+        + '</div></div>';
+    }).join('');
+    ptCardsSync();
+    ptSwipe();
+  }
+
+  /* ═══ ★取引先を 消す★（司さん 2026-10-23 ⑤「取引先を削除できるようにしろ」）══════════════
+     手本＝代行請求書の deleteCompany＝確かめ → 論理削除（deleted_at）→ 描き直し → 「削除しました」。
+     ★出した 請求書・下書きは 残る★（倉庫の 請求書は 1通も 触らない）。名前は S.gonePartners から 引く。
+     ★書けなかったら 消したと 言わない★（札も 残す）。 */
+  /** 倉庫の 断りの 訳を 客の 言葉に（中の 名前を そのまま 見せない・taiketsu 10-23 d） */
+  function ptWhy(reason) {
+    var r = String(reason || '');
+    if (!r) return '理由不明';
+    if (r === 'no-user') return 'ログインが 切れています。入り直してから もう一度';
+    if (/row-level security|permission|JWT|401|403/i.test(r)) return 'この 取引先を 直す 許しが ありません';
+    if (/fetch|network|Failed to|timeout/i.test(r)) return 'つながりません。電波の 良い 所で';
+    return r;
+  }
+  function ptDelete(id) {
+    var p = ptLive(id); if (!p) return Promise.resolve();
+    var nm = (p.data && p.data.name) || '(名称未設定)';
+    if (!global.confirm(nm + ' を取引先から削除します。よろしいですか？（出した請求書は残ります）')) return Promise.resolve();
+    box('pt-list-ok', ''); box('pt-list-err', '');
+    return S.store.partners.remove(id).then(function (r) {
+      if (!r || !r.ok) {
+        box('pt-list-err', '削除できませんでした（' + ptWhy(r && r.reason) + '）。もう一度 押してください。');
+        return;
+      }
+      S.gonePartners[id] = p;
+      var mae = ($('s-partner') && $('s-partner').value) || '';
+      return S.store.partners.list().then(function (list) {
+        S.partners = list;
+      }, function () {
+        S.partners = S.partners.filter(function (x) { return x.id !== id; });
+      }).then(function () {
+        fillPtSelect(mae === id ? '' : mae);
+        renderPtCards();
+        ptOpen(mae === id ? '' : mae);
+        box('pt-list-ok', '「' + nm + '」を取引先から削除しました（出した請求書は残ります）。');
+      });
+    }).catch(function (e) {
+      box('pt-list-err', '削除できませんでした（' + ptWhy(e && e.message) + '）。もう一度 押してください。');
+    });
+  }
+  /** 消した 取引先の 名前を 倉庫から 読む（読めなければ 何も しない） */
+  function ptGoneLoad() {
+    var st = S.store && S.store.partners;
+    if (!st || typeof st.gone !== 'function') return Promise.resolve();
+    return Promise.resolve(st.gone()).then(function (rows) {
+      /* ★読めなかった（null）と 0件（[]）を 作り分ける★（taiketsu 10-23 止A②＝落ちて「無し」扱いに しない） */
+      if (!Array.isArray(rows)) { S.goneReadOk = false; return; }
+      rows.forEach(function (x) { if (x && x.id) S.gonePartners[x.id] = x; });
+      S.goneReadOk = true;
+    }).catch(function () { S.goneReadOk = false; /* 画面は 止めない（足す 時に 止める） */ });
+  }
+  /** ★この 1通の 相手が 消した 取引先なら★ 選び肢に「（削除済み）」で 1つだけ 足す
+   *  ＝黙って「（選んでください）」に 見せない（相手は 外れていない）。新しい 請求書には 出ない。 */
+  function ptGoneOpt(v) {
+    var id = v && v.partner_id;
+    if (!id || ptLive(id)) return null;
+    var g = S.gonePartners && S.gonePartners[id];
+    if (!g) return null;
+    return { v: id, t: ((g.data && g.data.name) || '(名称未設定)') + '（取引先から削除済み）' };
+  }
+  /* ★左へ 払うと 赤い 削除★（手本＝代行請求書の attachSwipeHandlers・iOS の メールと 同じ 動き）
+     ・開いて 直している 札は 払っても 動かない（打つ 邪魔を しない）
+     ・欄・ボタンの 上から 払っても 動かない
+     ・払って 開いている 時に 押す＝閉じるだけ（開かない・消さない）
+     ・1枚 払うと 他の 払った 札は 閉じる */
+  var PT_SW_OPEN = -86, PT_SW_TH = -42;
+  function ptSwipe() {
+    Array.prototype.forEach.call(document.querySelectorAll('#pt-cards .swipe-content'), function (content) {
+      if (content._sw) return;
+      content._sw = true;
+      var sx = 0, sy = 0, dx = 0, dragging = false, decided = false, horiz = false;
+      function opened() { return content.classList.contains('swipe-open'); }
+      function setX(x) { content.style.transform = 'translateX(' + x + 'px)'; }
+      function closeOthers() {
+        Array.prototype.forEach.call(document.querySelectorAll('#pt-cards .swipe-content.swipe-open'), function (c) {
+          if (c !== content) { c.classList.remove('swipe-open'); c.style.transform = 'translateX(0px)'; }
+        });
+      }
+      content.addEventListener('touchstart', function (e) {
+        dragging = false;
+        if (!e.touches || e.touches.length !== 1) return;
+        var co = content.closest('.pt-co');
+        if (co && co.classList.contains('open')) return;
+        if (e.target && e.target.closest && e.target.closest('input,select,textarea,button')) return;
+        sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+        dx = opened() ? PT_SW_OPEN : 0;
+        dragging = true; decided = false; horiz = false;
+        content.classList.add('swiping');
+      }, { passive: true });
+      content.addEventListener('touchmove', function (e) {
+        if (!dragging || !e.touches || !e.touches.length) return;
+        var ddx = e.touches[0].clientX - sx, ddy = e.touches[0].clientY - sy;
+        if (!decided && (Math.abs(ddx) > 8 || Math.abs(ddy) > 8)) {
+          decided = true;
+          horiz = Math.abs(ddx) > Math.abs(ddy);
+          if (horiz) closeOthers();
+        }
+        if (decided && horiz) {
+          if (e.cancelable) e.preventDefault();
+          var base = opened() ? PT_SW_OPEN : 0;
+          dx = Math.max(PT_SW_OPEN, Math.min(0, base + ddx));
+          setX(dx);
+        }
+      }, { passive: false });
+      function end() {
+        if (!dragging) return;
+        dragging = false;
+        content.classList.remove('swiping');
+        if (!horiz) return;
+        if (dx < PT_SW_TH) { content.classList.add('swipe-open'); setX(PT_SW_OPEN); }
+        else { content.classList.remove('swipe-open'); setX(0); }
+      }
+      content.addEventListener('touchend', end);
+      content.addEventListener('touchcancel', end);
+      content.addEventListener('click', function (e) {
+        if (!opened()) return;
+        e.stopPropagation(); e.preventDefault();
+        content.classList.remove('swipe-open'); setX(0);
+      });
+    });
+  }
+  /** 開いている 札を s-partner に 合わせる（中の 欄を 移す） */
+  function ptCardsSync() {
+    var host = $('pt-cards'); if (!host) return;
+    var cur = ($('s-partner') && $('s-partner').value) || '';
+    var ed = $('pt-editor');
+    var moved = false;
+    Array.prototype.forEach.call(host.querySelectorAll('.pt-co'), function (c) {
+      var on = !!cur && c.getAttribute('data-pt') === cur;
+      c.classList.toggle('open', on);
+      var hd = c.querySelector('.pt-co-hd');
+      if (hd) hd.setAttribute('aria-expanded', on ? 'true' : 'false');
+      if (on && ed) {
+        var body = c.querySelector('.pt-co-body');
+        if (body && ed.parentNode !== body) body.insertBefore(ed, body.firstChild);
+        moved = true;
+      }
+    });
+    if (!moved) ptPark();
+  }
+  /** 札の 一言だけ 書き直す（★欄は 動かさない★＝打っている 最中に 欄が 消えない） */
+  function ptHeads() {
+    var host = $('pt-cards'); if (!host) return;
+    Array.prototype.forEach.call(host.querySelectorAll('.pt-co'), function (c) {
+      var p = ptLive(c.getAttribute('data-pt')); if (!p) return;
+      var sb2 = c.querySelector('.pt-co-sub'); if (sb2) sb2.textContent = ptSub(p);
+    });
+  }
+  /** この 相手の 札を 開く（'' で 全部 閉じる）。★前の 選び箱を 選んだのと 同じ 道★ */
+  function ptOpen(id) {
+    if (id && !ptLive(id)) id = '';
+    var sel = $('s-partner');
+    var mae = (sel && sel.value) || '';
+    if (sel) sel.value = id || '';
+    /* ★別の 相手へ 移ったら 前の 相手の「保存しました」を 残さない★ */
+    if (mae !== (id || '')) { box('pt-ok', ''); box('pt-err', ''); }
+    fillPartnerForm(id || '');
+    renderPtAsk();
+    ptCardsSync();
+  }
+  function ptToggle(id) {
+    var cur = ($('s-partner') && $('s-partner').value) || '';
+    ptOpen(cur === id ? '' : id);
+  }
+  /** ★取引先を 足す★＝名前 1つだけ 聞く（入力の「＋ 新しい相手を作る」と 同じ 倉庫の 道）。
+   *  ★同じ名前の 相手は 2つ 作らない★（倉庫の create が 在る 相手を 返す）＝その 札を 開く。 */
+  var PT_ADD_KIGEN = 20000;   /* ★倉庫が 返らない 時の 期限★（訳を 出す・印は 本体が 返るまで 下ろさない） */
+  /** ★同じ 名前の 取引先を どうするか 決めて 書く★＝1か所（設定の「＋ 取引先を追加」と 入力の「この相手を作る」）
+   *  （司さん 10-16 の 決め＝前に 消した 同じ 名前に 記録が 残っていれば 混ぜるかを 訊く・手本 mazeruKaKiku）
+   *  ・★毎回 倉庫から 読み直す★（生きている 取引先・消した 取引先・残っている 請求書）＝画面の 控えに 頼らない
+   *  ・どれか 読めなければ ★作らない★
+   *  ・★期限（PT_ADD_KIGEN）が 来たら 訳だけ 出す★。確かめ中の 印は ★本体が 返るまで 下ろさない★
+   *    （下ろすと「もう一度」で 2本 走り、同じ 名前が 2行 出来る・taiketsu 10-23 4回目 止1）。
+   *    期限の 後に 返った 時は ★確かめも 作りも 戻しも しない★（書く 直前でも 見る）。
+   *  waza: { err(字), create(betsu) → 書けたら true, revive(前の相手) → 書けたら true } */
+  function ptNayose(name, waza) {
+    if (S.ptAddChu) { waza.err('取引先の 記録を 確かめています。少し 待ってから もう一度 押してください。'); return Promise.resolve(); }
+    var DAME = '取引先を 足しませんでした（今は 前に 消した 取引先の 記録を 確かめられません）。少し 待ってから もう一度 押してください。';
+    S.ptAddChu = true;
+    var kireta = false;
+    var tid = global.setTimeout(function () {
+      kireta = true;
+      waza.err('取引先の 記録の 確かめが 返ってきません（' + Math.round(PT_ADD_KIGEN / 1000) + '秒）。'
+        + '返ってくるまで 待ってください（このまま 作りも 戻しも しません）。');
+    }, PT_ADD_KIGEN);
+    var osoi = function () { waza.err('確かめが 遅れたので、取引先は 作りも 戻しも しませんでした。もう一度 押してください。'); };
+    var hontai = Promise.all([
+      S.store.partners.list(),
+      Promise.resolve(S.store.partners.gone ? S.store.partners.gone() : null),
+    ]).then(function (r) {
+      if (kireta) return osoi();
+      var live = r[0], gone = r[1];
+      if (!Array.isArray(live) || !Array.isArray(gone)) { waza.err(DAME); return; }
+      /* 読めた 物で 控えも 直す（以後の 画面も 正しく） */
+      S.partners = live;
+      gone.forEach(function (x) { if (x && x.id) S.gonePartners[x.id] = x; });
+      S.goneReadOk = true;
+      var onaji = function (x) { return String(((x && x.data && x.data.name) || '')).trim() === name; };
+      /* ★生きている 同じ 名前★は 倉庫の create が その 相手を 返す（2つ 作らない）＝訊かない */
+      if (live.some(onaji)) return waza.create(false);
+      var cand = gone.filter(onaji);
+      if (!cand.length) return waza.create(false);
+      return ptKiroku(cand).then(function (mae) {
+        if (kireta) return osoi();
+        if (!mae) { waza.err(DAME); return; }
+        if (mae.tsu > 0) {
+          var mazeru = global.confirm('「' + name + '」の 名前で 前に 消した 取引先の 記録が 残っています（'
+            + '請求書 ' + mae.tsu + '通' + (mae.nyukin === null ? '・入金は未確認' : mae.nyukin ? '・入金 ' + mae.nyukin + '件' : '') + '）。\n'
+            + 'この 取引先に 混ぜますか？ 混ぜると、前の 請求書・入金・繰越が この 取引先に 続きます。\n'
+            + '混ぜないと、新しい 取引先として 作ります（前の 請求書は 前の まま 残り、繰越は 引き継ぎません）。');
+          if (kireta) return osoi();               /* ★書く 直前でも 見る★ */
+          return mazeru ? waza.revive(mae.p) : waza.create(true);
+        }
+        return waza.create(false);
+      });
+    }, function () { waza.err(DAME); });
+    return hontai.then(function (kaketa) {
+      global.clearTimeout(tid);
+      S.ptAddChu = false;
+      if (kaketa === true && kireta) waza.err('');     /* 遅れたが 書けた＝「返ってきません」を 残さない */
+    }, function (e) {
+      global.clearTimeout(tid);
+      S.ptAddChu = false;
+      waza.err('足せませんでした（' + ptWhy(e && e.message) + '）。もう一度 押してください。');
+    });
+  }
+  function ptAdd() {
+    var inp = $('pt-add-name');
+    var name = String((inp && inp.value) || '').trim();
+    box('pt-list-ok', ''); box('pt-list-err', '');
+    if (!name) { box('pt-list-err', '会社名を入れてください。'); return Promise.resolve(); }
+    return ptNayose(name, {
+      err: function (m) { box('pt-list-err', m); },
+      create: function (betsu) {
+        return ptCreate(name, betsu ? '「' + name + '」を 新しい 取引先として 足しました（前の 請求書は 前の まま・繰越は 引き継ぎません）。' : null);
+      },
+      revive: function (g) { return ptRevive(g, name); },
+    });
+  }
+  /** ★残っている 記録を 倉庫から 数える★（★請求書だけを 数える★＝繰越・お金が 続くのは 請求書だけ。見積は 数えない。
+   *  今 画面が 見積書の 一覧でも 倉庫の 請求書を 読む・入金も）。
+   *  読めなければ null（＝確かめられない＝足さない）。いちばん 記録の 多い 相手を 返す。 */
+  function ptKiroku(cand) {
+    return Promise.all([
+      S.store.invoices.list('invoice'),
+      Promise.resolve(S.store.receipts.list()).catch(function () { return null; }),
+    ]).then(function (r) {
+      var invs = r[0] || [];
+      /* ★入金が 読めない 時は 0件と 言わない★（silent-catch の 門・2026-10-25）＝null＝「入金は未確認」と 訊く 文に 出す */
+      var recs = Array.isArray(r[1]) ? r[1] : null;
+      var best = null;
+      cand.forEach(function (g) {
+        var mine = invs.filter(function (v) { return v.partner_id === g.id; });
+        var ids = {}; mine.forEach(function (v) { ids[v.id] = 1; });
+        var nyukin = recs ? recs.filter(function (x) { return ids[x.invoice_id]; }).length : null;
+        var e = { p: g, tsu: mine.length, nyukin: nyukin };
+        if (!best || e.tsu > best.tsu) best = e;
+      });
+      return best;
+    }, function () { return null; });
+  }
+  /** ★混ぜる＝前の 相手を 戻す★（同じ id＝前の 請求書・入金・繰越が 続く） */
+  function ptRevive(g, name) {
+    return S.store.partners.revive(g.id).then(function (r) {
+      if (!r || !r.ok) { box('pt-list-err', '戻せませんでした（' + ptWhy(r && r.reason) + '）。もう一度 押してください。'); return; }
+      delete S.gonePartners[g.id];
+      return S.store.partners.list().then(function (list) {
+        S.partners = list;
+        var inp = $('pt-add-name'); if (inp) inp.value = '';
+        fillPtSelect('');
+        renderPtCards();
+        ptOpen(g.id);
+        try { drawListPartners(); } catch (e) { /* 一覧が 無い 画面でも 止めない */ }
+        box('pt-list-ok', '「' + name + '」を 前の 取引先に 戻しました（前の 請求書・入金・繰越が 続きます）。');
+        return true;
+      });
+    }).catch(function (e) {
+      box('pt-list-err', '戻せませんでした（' + ptWhy(e && e.message) + '）。もう一度 押してください。');
+    });
+  }
+  function ptCreate(name, okMsg) {
+    var inp = $('pt-add-name');
+    return S.store.partners.create({ name: name }).then(function (r) {
+      if (!r || !r.ok) { box('pt-list-err', '足せませんでした（' + ptWhy(r && r.reason) + '）。もう一度 押してください。'); return; }
+      return S.store.partners.list().then(function (list) {
+        S.partners = list;
+        if (inp) inp.value = '';
+        fillPtSelect('');
+        renderPtCards();
+        ptOpen(r.id);
+        try { drawListPartners(); } catch (e) { /* 一覧が 無い 画面でも 止めない */ }
+        box('pt-list-ok', r.already
+          ? '「' + name + '」は もう在ったので、その相手を開きました。'
+          : (okMsg || ('「' + name + '」を足しました。開いた札の中で 1問ずつ聞きます。')));
+        return true;
+      });
+    }).catch(function (e) {
+      box('pt-list-err', '足せませんでした（' + ptWhy(e && e.message) + '）。もう一度 押してください。');
+    });
+  }
+
   /** ★打った その場で 形を見る★（通信しない・国税庁のサイトは叩かない） */
   function ptInvoiceHint() {
     var el = $('s-pinvoice'), h = $('s-pinvoice-hint'); if (!el || !h) return;
@@ -4749,6 +6376,23 @@
     h.className = 'hint' + (chk.ok ? '' : ' bad-t');
   }
 
+  /* ★お振込先だけを しまう★（taiketsu ⑤⑥ 止1・2026-10-25）
+     設定を 3つに 分けた（⑥）ので、自社情報の「保存」が テンプレートの 欄（繰越・取り消した入金・税・番号…）まで
+     黙って しまっていた＝見えていない 変えかけが 倉庫に 入る。倉庫は 渡した 欄だけ 重ねる（suite-data）＝お振込先だけ 渡す。 */
+  function saveBankOnly() {
+    /* ★知らせは お振込先の 札（bank-ok／bank-err）だけ★（taiketsu ⑤⑥ 3回目 止1）
+       テンプレートの 欄の set-ok に「保存しました。」を 書くと、まだ しまっていない 様式も しまったと 読めた */
+    box('bank-ok', ''); box('bank-err', '');
+    var okuru = $('s-bank').value;
+    return S.store.org.save({ bank: okuru }).then(function (r) {
+      if (!r.ok) { box('bank-err', '保存できませんでした（' + ptWhy(r.reason) + '）'); return; }
+      /* ★しまった 欄だけ 手元に 重ねる★（taiketsu ⑤⑥ 2回目 止1）＝倉庫の 返りで S.org を 丸ごと 置き換えると、
+         テンプレートで 選んで まだ しまっていない 様式・列（手元の S.org にだけ 在る）が 黙って 元に 戻った。
+         返りに bank が 無い 時は ★送った 値★（待つ 間に 打った 字では ない） */
+      S.org = Object.assign({}, S.org || {}, { bank: (r.data && r.data.bank !== undefined) ? r.data.bank : okuru });
+      box('bank-ok', '保存しました。');
+    });
+  }
   function saveSettings() {
     var patch = {
       numbering: Object.assign({}, (S.org && S.org.numbering) || {}, {
@@ -4756,11 +6400,13 @@
       }),
       taxMode: $('s-taxmode').value,
       taxRounding: $('s-round').value,
-      bank: $('s-bank').value,
+      /* お振込先は 自社情報の「保存」だけが しまう（saveBankOnly）＝テンプレートの 保存で 打ちかけの 口座を 入れない */
       invoiceCarry: $('s-carry').checked,
+      invoiceVoidPay: $('s-voidpay').checked ? 'count' : 'ignore',
       invoicePaperRows: rowsSetting($('s-rows').value),
       invoiceDeductRows: rowsSetting($('s-dedrows').value),
       invoiceTemplate: settings().template,
+      invoiceTemplateAt: (S.org && S.org.invoiceTemplateAt) || null,
       invoiceCols: COLS.normalizeSpec((S.org && S.org.invoiceCols) || TPL.getOrDefault(settings().template).cols),
       /* ★選ばなかった物は 持たない★＝様式の既定が効く（空の値を保存して 既定を上書きしない） */
       invoiceStyle: (function () {
@@ -4782,10 +6428,13 @@
     var errs = DOC.validateNumbering({ format: patch.numbering.invoice.format, resetYearly: patch.numbering.invoice.resetYearly, partnerCode: 'A001' });
     var cerrs = COLS.validate(patch.invoiceCols.items);
     if (cerrs.length) errs = errs.concat(cerrs);
-    if (errs.length) { box('set-err', errs.join(' ')); box('set-ok', ''); return Promise.resolve(); }
+    /* ★押した 時に 前の 知らせを 両方 消す★（taiketsu 10-23 止3＝前の「保存しました。」が 残ったまま 落ちると、
+       成功と 失敗が 同時に 出ていた） */
+    box('set-ok', '');
+    if (errs.length) { box('set-err', errs.join(' ')); return Promise.resolve(); }
     box('set-err', '');
     return S.store.org.save(patch).then(function (r) {
-      if (!r.ok) { box('set-err', '保存できませんでした（' + r.reason + '）'); return; }
+      if (!r.ok) { box('set-err', '保存できませんでした（' + ptWhy(r.reason) + '）'); return; }
       S.org = r.data;
       box('set-ok', '保存しました。');
     });
@@ -4798,21 +6447,45 @@
   function newPartner() {
     var name = String($('pt-new-name').value || '').trim();
     show($('pt-new-msg'), false);
-    if (!name) { box('pt-new-msg', '会社名を入れてください。'); show($('pt-new-msg'), true); return Promise.resolve(); }
-    return S.store.partners.create({ name: name }).then(function (r) {
-      if (!r.ok) { setText('pt-new-msg', '作れませんでした（' + r.reason + '）'); show($('pt-new-msg'), true); return; }
+    var say = function (m) { setText('pt-new-msg', m); show($('pt-new-msg'), !!m); };
+    if (!name) { say('会社名を入れてください。'); return Promise.resolve(); }
+    /* ★設定の「＋ 取引先を追加」と 同じ 判じ★（taiketsu 10-23 4回目 止2・司さん 10-16 の 決めを 入力の 道にも）
+       ＝倉庫を 読み直す → 生きている 同じ 名前なら それを 選ぶ／前に 消した 同じ 名前に 請求書が 残れば 混ぜるかを 訊く／
+         読めなければ 作らない。★混ぜる＝前の 相手を 戻して この 請求書の 相手に する★（前の 請求書・繰越が 続く）。 */
+    var tsukau = function (id, ji) {
       return S.store.partners.list().then(function (list) {
         S.partners = list;
-        if (S.cur) S.cur.partner_id = r.id;          // ★作った相手を そのまま使う★
         $('pt-new-name').value = '';
         S.ptNewOpen = false;              // 作れたら 欄は閉じる（空欄を残さない）
-        fillEdit();
+        /* ★作った相手を そのまま使う★＝選びで 変えた 時と 同じ 道（aiteWoKaeta）を 通す（taiketsu S1・もう在った 相手でも） */
+        if (S.cur && S.cur.partner_id !== id) aiteWoKaeta(id);
+        var ok = ($('edit-ok') && $('edit-ok').style.display !== 'none') ? $('edit-ok').textContent : '';
+        fillEdit();                       /* 選びに 新しい 相手を 並べる */
         recalc();
-        setText('pt-new-msg', r.already
-          ? '「' + name + '」は もう在ったので、その相手を選びました。'
-          : '「' + name + '」を作って、この請求書の相手にしました。あとは下で 1問ずつ聞きます。');
-        show($('pt-new-msg'), true);
+        if (ok) box('edit-ok', ok);       /* 外した・当てた 知らせは 残す */
+        say(ji);
+        return true;
       });
+    };
+    return ptNayose(name, {
+      err: say,
+      create: function (betsu) {
+        return S.store.partners.create({ name: name }).then(function (r) {
+          if (!r || !r.ok) { say('作れませんでした（' + ptWhy(r && r.reason) + '）。もう一度 押してください。'); return; }
+          return tsukau(r.id, r.already
+            ? '「' + name + '」は もう在ったので、その相手を選びました。'
+            : betsu
+              ? '「' + name + '」を 新しい 取引先として 作り、この請求書の相手にしました（前の 請求書は 前の まま・繰越は 引き継ぎません）。'
+              : '「' + name + '」を作って、この請求書の相手にしました。あとは下で 1問ずつ聞きます。');
+        }).catch(function (e) { say('作れませんでした（' + ptWhy(e && e.message) + '）。もう一度 押してください。'); });
+      },
+      revive: function (g) {
+        return S.store.partners.revive(g.id).then(function (r) {
+          if (!r || !r.ok) { say('戻せませんでした（' + ptWhy(r && r.reason) + '）。もう一度 押してください。'); return; }
+          delete S.gonePartners[g.id];
+          return tsukau(g.id, '「' + name + '」を 前の 取引先に 戻して、この請求書の相手にしました（前の 請求書・入金・繰越が 続きます）。');
+        }).catch(function (e) { say('戻せませんでした（' + ptWhy(e && e.message) + '）。もう一度 押してください。'); });
+      },
     });
   }
 
@@ -4822,6 +6495,9 @@
     var out = {};
     var tpl = $('s-ptpl') ? $('s-ptpl').value : '';
     if (tpl && TPL.get(tpl)) out.template = tpl;
+    /* ★様式を 付けた・外した 時刻を 持つ★（2026-10-24 taiketsu 止B）＝それより 前に 発行した 紙は「前回」に 数えない */
+    if ((now.template || '') !== (out.template || '')) out.templateAt = new Date().toISOString();
+    else if (now.templateAt) out.templateAt = now.templateAt;
     var rows = $('s-prows') ? String($('s-prows').value).trim() : '';
     if (rows !== '') {
       var n = Number(rows);
@@ -4831,7 +6507,10 @@
     if (sj === 'on') out.subjectOn = true;
     else if (sj === 'off') out.subjectOn = false;
     /* 列は ボタンで作る物（フォームの欄ではない）＝今の物を そのまま持ち越す */
-    if (now.cols && now.cols.items && now.cols.items.length) out.cols = now.cols;
+    if (now.cols && now.cols.items && now.cols.items.length) {
+      out.cols = now.cols;
+      if (now.colsTpl) out.colsTpl = now.colsTpl;      /* ★列の 様式の 印も 持ち越す★ */
+    }
     /* ★口座★ … 全部にチェックが入っている時は ★入れない★（＝会社の既定のまま＝全部）。
        1つも 選んでいない時も 入れない（全部に 戻す）。＝空欄を 相手に 持たせない。 */
     var host = $('s-pbanks');
@@ -4881,12 +6560,88 @@
     });
   }
 
+  /* ★相手を 変えた 時の 道は 1本★（taiketsu S1 2026-10-23＝その場で 相手を 作る 道は partner_id を 書き換えて
+     描き直す だけで、前の 相手の 明細・控除・件名・源泉・税・期限と「前回（No.…）と同じ」が 新しい 相手に 残った）
+     ＝選びで 変えても その場で 作っても ★ここを 通す★ */
+  function aiteWoKaeta(pid) {
+    S.cur.partner_id = pid;
+    S.dirty = true; jidoYoyaku();
+    S.guessDone = false;          // 相手を変えたら、また前回から当て直す
+    /* ★前の 相手から 自動で 入れた まま の 値は 外す★（2026-10-23 司さん「前の取引先の中身が反映されてる時がある」）
+       ＝外さないと B社の 1通に A社の 件名・明細・控除が 残る。打った 物は 残す（jidoHazusu の 註） */
+    var hz = jidoHazusu(S.cur), hazushita = hz.out;
+    S.oiToki = !!hazushita.length;  /* 前の 相手の 物を 外した＝残った 行の 後ろに この相手の 前回を 足してよい */
+    /* ★画面は いつも 中身で 描き直す★（taiketsu S2＝外す物が 無い 時に 税の 欄だけ 前の まま 残った） */
+    $('e-subject').value = (S.cur.data && S.cur.data.subject) || '';
+    $('e-memo').value = (S.cur.data && S.cur.data.memo) || '';
+    /* 税の 欄は 当て直しの 後で 描く（下の zeiBun の 所＝最後の 値で 1回） */
+    if (hazushita.length) ['tag-subject', 'tag-term', 'tag-gensen'].forEach(function (id) { show($(id), false); });
+    box('edit-ok', '');           /* ★前の 相手の「前回（No.…）と 同じで 用意しました」を 残さない★ */
+    applyPartnerDefaults();
+    /* ★取引先の既定（源泉の対象か・支払期限）を画面へ戻す★
+       ここを忘れると、中では源泉ありなのにチェックが外れて見える＝
+       人が「入れ直す」ために1回 余計に押すことになる（2026-08-11 検査で発生）。 */
+    $('e-gensen').checked = !!(S.cur.data && S.cur.data.gensen);
+    var term = (S.cur.data && S.cur.data.term) || { kind: 'none', n: 0 };
+    $('e-term').value = term.kind || 'none';
+    $('e-termn').value = term.n || '';
+    show($('e-termn'), term.kind === 'days' || term.kind === 'nextDay');
+    $('e-due').value = S.cur.due_ymd || '';
+    /* ★相手を変えたら 紙も 変わりうる★（取引先ごとに 様式を 設定で 決められる＝2026-09-05）
+       ★ここを 呼ばないと 1行に 出る名前と 実際に 出る紙が 食い違う★ */
+    tplSync();
+    renderTplAsk();
+    renderLines();
+    renderDeductions();
+    recalc();
+    drawGensenHint();
+    S.zeiItta = false;
+    renderGuess();
+    S.oiToki = false;
+    /* ★税・端数は 当て直しが 終わった 後の 値と 比べて 言う★（taiketsu 止2＝「税抜きに 戻す」と 書いた 直後に
+       次の 相手の 前回が 税込みを 黙って 入れ、字と 中身と 欄が 逆に なった） */
+    var zeiBun = '';
+    /* ★当て直しの 知らせが もう 税・端数を 言った 時は 言わない★（2回 言わない・任意4） */
+    if (S.zeiItta) {
+      zeiBun = '';
+    } else if (hz.zeiNokoshi && S.cur.tax_mode === hz.taxMae && S.cur.rounding === hz.roundMae) {
+      zeiBun = '打った 明細が 残っているので、金額の入れ方（' + zeiNa(S.cur.tax_mode) + '）と 端数の 扱い（' + marumeNa(S.cur.rounding) + '）は そのままに しました。';
+    } else {
+      if (hz.taxMae && S.cur.tax_mode !== hz.taxMae) zeiBun += '金額の入れ方を ' + zeiNa(S.cur.tax_mode) + ' に しました。';
+      if (hz.roundMae && S.cur.rounding !== hz.roundMae) zeiBun += '消費税の 端数の 扱いを ' + marumeNa(S.cur.rounding) + ' に しました。';
+    }
+    if ($('e-taxmode')) $('e-taxmode').value = (S.cur.tax_mode === 'inclusive') ? 'inclusive' : 'exclusive';
+    if (zeiBun && !hazushita.length) {
+      var ateta0 = ($('edit-ok') && $('edit-ok').style.display !== 'none') ? $('edit-ok').textContent : '';
+      box('edit-ok', zeiBun + (ateta0 ? '\n' + ateta0 : ''));
+    }
+    if (hazushita.length) {
+      /* ★黙って 外さない★＝何を 外したかを 言う（当てた 知らせが 在れば その 前に 並べる） */
+      var ateta = ($('edit-ok') && $('edit-ok').style.display !== 'none') ? $('edit-ok').textContent : '';
+      var nokori = [];
+      if (hz.nokoriL) nokori.push('明細 ' + hz.nokoriL + '行');
+      if (hz.nokoriD) nokori.push('控除 ' + hz.nokoriD + '行');
+      box('edit-ok', '前の 相手から 入れていた ' + hazushita.join('・') + ' は 外しました。'
+        + (nokori.length ? '（打った・直した ' + nokori.join('・') + ' は 残しています。要らなければ × で 消せます）' : '')
+        + (zeiBun ? '\n' + zeiBun : '')
+        + (ateta ? '\n' + ateta : ''));
+    }
+    /* ★相手を変えたら 聞く形も描き直す★
+       （実UIの押し込みで見つけた：変えても聞かれない＝設定へ行かせていた） */
+    renderPtAsk();
+    return autoNumber();
+  }
+
   /* ═══ 配線 ═══ */
   function bind() {
     Array.prototype.forEach.call(document.querySelectorAll('.bn'), function (b) {
       b.onclick = function () {
         var t = b.getAttribute('data-scr');
-        if (t === 'scr-edit' && !S.cur) { newInvoice(); return; }
+        /* ★保存・発行を 終えた 1通の 後の「入力」は 新しい 白紙★（2026-10-23 司さん
+           「新しい請求書を入力から作る時に、前の取引先の中身が反映されてる」）
+           ＝前は 終えた 1通が そのまま 出て、相手を 変えて 打つと ★その 1通が 書き換わった★。
+           ★打ちかけ（修正で 開いて まだ 保存も 発行も していない）は 続きを 出す★＝打った 物を 失わない */
+        if (t === 'scr-edit' && (!S.cur || owattaNoMama())) { newInvoice(); return; }
         if (t === 'scr-set') fillSettings();
         /* ★設定を変えて戻ってきた時、古い案内を残さない★
            （紙の行数を20行にしたのに「紙は2枚になります」と言ったまま＝
@@ -4958,32 +6713,7 @@
         var nm = $('pt-new-name'); if (nm) nm.focus();
         return;
       }
-      S.cur.partner_id = $('e-partner').value;
-      S.dirty = true; jidoYoyaku();
-      S.guessDone = false;          // 相手を変えたら、また前回から当て直す
-      applyPartnerDefaults();
-      /* ★取引先の既定（源泉の対象か・支払期限）を画面へ戻す★
-         ここを忘れると、中では源泉ありなのにチェックが外れて見える＝
-         人が「入れ直す」ために1回 余計に押すことになる（2026-08-11 検査で発生）。 */
-      $('e-gensen').checked = !!(S.cur.data && S.cur.data.gensen);
-      var term = (S.cur.data && S.cur.data.term) || { kind: 'none', n: 0 };
-      $('e-term').value = term.kind || 'none';
-      $('e-termn').value = term.n || '';
-      show($('e-termn'), term.kind === 'days' || term.kind === 'nextDay');
-      $('e-due').value = S.cur.due_ymd || '';
-      /* ★相手を変えたら 紙も 変わりうる★（取引先ごとに 様式を 設定で 決められる＝2026-09-05）
-         ★ここを 呼ばないと 1行に 出る名前と 実際に 出る紙が 食い違う★ */
-      tplSync();
-      renderTplAsk();
-      renderLines();
-      renderDeductions();
-      recalc();
-      drawGensenHint();
-      renderGuess();
-      /* ★相手を変えたら 聞く形も描き直す★
-         （実UIの押し込みで見つけた：変えても聞かれない＝設定へ行かせていた） */
-      renderPtAsk();
-      return autoNumber();
+      return aiteWoKaeta($('e-partner').value);
     };
     $('e-issue').onchange = function () {
       S.cur.issue_ymd = $('e-issue').value;
@@ -5017,6 +6747,7 @@
            札を 描いているのは fillSettings（下のタブの 押し方と 同じ）。 */
       fillSettings();
       goScreen('scr-set');
+      showSetSeg('tpl');   /* ★様式は「テンプレート」の 中★（2026-10-23 ⑥ 設定を 3つに 分けた） */
       global.setTimeout(function () {
         var c = $('s-tpl-card'); if (!c) return;
         /* ★無い物を 呼ばない★＝転がす手が 無い所（試験の 仮の画面・古い端末）では
@@ -5026,6 +6757,19 @@
         try { c.scrollIntoView({ block: 'start' }); } catch (e) { try { c.scrollIntoView(); } catch (e2) { /* 転がせなくても 着いている */ } }
       }, 60);
     };
+    /* ★[この取引先だけ 別の紙にする]＝設定 ▸ 取引先 の その相手の「様式」へ 連れて行く★（2026-10-23）
+       ★作りかけの 1通は 消さない★（[設定で変える] と 同じ＝続きから 戻れる） */
+    var tplPt = $('b-tpl-pt');
+    if (tplPt) tplPt.onclick = function () {
+      var pid = S.cur && S.cur.partner_id;
+      fillSettings();
+      goScreen('scr-set');
+      /* ★取引先は「取引先」の 切り替えの 中の 札★（2026-10-23 ⑥ 設定を 3つに 分けた）＝その 相手の 札を 開く */
+      showSetSeg('torihiki');
+      if (pid && ptLive(pid)) ptOpen(pid);
+      ptTplHiraku();
+    };
+    if ($('b-pt-tpl-open')) $('b-pt-tpl-open').onclick = function () { ptTplHiraku(); };
     $('b-no-edit').onclick = function () {
       var open = $('e-no').style.display !== 'none';
       if (open) {
@@ -5130,8 +6874,34 @@
       });
       renderList();
     };
-    if ($('rep-month')) $('rep-month').onchange = function () {
-      repMonth = $('rep-month').value; renderReport();
+    /* ★2026-10-23 一覧の 集計の 月の 選び（rep-month）の 配線は 外した★＝欄が 一覧から 無くなった。
+       集計は 別の「請求／集計」の 画面が 配線する。 */
+    /* ═══ ★請求 / 集計★（2026-10-23）切り替え・選ぶ・出す ═══ */
+    Array.prototype.forEach.call(document.querySelectorAll('#scr-bill .bk-seg-b'), function (b) {
+      b.onclick = function () { billSegShow(b.getAttribute('data-bseg')); };
+    });
+    if ($('bk-rep-month')) $('bk-rep-month').onchange = function () {
+      repMonth = $('bk-rep-month').value; box('bk-rep-ok', ''); box('bk-rep-err', ''); renderReport();
+    };
+    if ($('b-bk-rep-xlsx')) $('b-bk-rep-xlsx').onclick = function () { repExcel(); };
+    if ($('bk-month')) $('bk-month').onchange = function () {
+      billPick.ym = $('bk-month').value; box('bk-ok', ''); box('bk-err', ''); renderBill();
+    };
+    if ($('bk-partner')) $('bk-partner').onchange = function () {
+      billPick.pid = $('bk-partner').value; box('bk-ok', ''); box('bk-err', ''); renderBill();
+    };
+    /* PDF は 名前を 先に 見せて 直させる（司さんの 決まり）／印刷は 聞かない（「印刷押すだけ」） */
+    if ($('b-bk-pdf')) $('b-bk-pdf').onclick = function () {
+      var made = billMade(); if (!made) return;
+      askNameWith(billName(made, 'pdf'), 'pdf', function (n) { billPdf(made, n, 'PDF'); });
+    };
+    if ($('b-bk-print')) $('b-bk-print').onclick = function () {
+      var made = billMade(); if (!made) return;
+      billPdf(made, billName(made, 'pdf'), '印刷');
+    };
+    if ($('b-bk-xlsx')) $('b-bk-xlsx').onclick = function () {
+      var made = billMade(); if (!made) return;
+      askNameWith(billName(made, 'xlsx'), 'xlsx', function (n) { billExcel(made, n); });
     };
     /* ★動かしたら その場で 絵が変わる★（押さないと分からない、を作らない） */
     ['seal-mm', 'seal-x', 'seal-y'].forEach(function (id) {
@@ -5174,7 +6944,32 @@
     $('s-rows').oninput = rowsHint;
     $('s-dedrows').oninput = rowsHint;
     $('s-reset').onchange = settingsHint;
-    $('s-partner').onchange = function () { fillPartnerForm($('s-partner').value); renderPtAsk(); };
+    /* ★選び箱は 見せない★（2026-10-23 ⑥）が、中で 動く 相手の 印＝選んだら その 札を 開く */
+    $('s-partner').onchange = function () { ptOpen($('s-partner').value); };
+    /* ★設定の 切り替え 3つ★（取引先／自社情報／テンプレート） */
+    Array.prototype.forEach.call(document.querySelectorAll('#set-seg .set-seg-b'), function (b) {
+      b.onclick = function () { showSetSeg(b.getAttribute('data-setseg')); };
+    });
+    /* ★取引先の 札★＝押すと 開く／閉じる（キーボードは Enter・空白）。何度 配線しても 1つ（onclick で 持つ） */
+    if ($('pt-cards')) {
+      $('pt-cards').onclick = function (ev) {
+        var t = ev.target;
+        /* ★消す★（払って 出た 赤／開いた 中の「取引先を削除」）＝どちらも 同じ 確かめを 通す */
+        var del = t && t.closest && t.closest('[data-pt-del]');
+        if (del) { ptDelete(del.getAttribute('data-pt-del')); return; }
+        var hd = t && t.closest && t.closest('[data-pt-open]');
+        if (hd) ptToggle(hd.getAttribute('data-pt-open'));
+      };
+      $('pt-cards').onkeydown = function (ev) {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        var hd = ev.target && ev.target.closest && ev.target.closest('[data-pt-open]');
+        if (!hd || ev.target !== hd) return;     /* ★中の 欄で 打つ Enter は 拾わない★ */
+        ev.preventDefault();
+        ptToggle(hd.getAttribute('data-pt-open'));
+      };
+    }
+    if ($('b-pt-add')) $('b-pt-add').onclick = function () { return ptAdd(); };
+    if ($('pt-add-name')) $('pt-add-name').onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); ptAdd(); } };
     $('s-pinvoice').oninput = ptInvoiceHint;
     bindPtAsk();
     $('s-pterm').onchange = function () {
@@ -5206,6 +7001,15 @@
       if (el && el.focus) el.focus();
     };
     $('b-set-save').onclick = function () { return saveSettings(); };
+    /* ★お振込先は 自社情報へ 移した★（2026-10-23 ⑥）＝しまう 道は 前と 同じ saveSettings 1本。
+       知らせは ★押した 所（お振込先の 札）に 出す★（隣の 切り替えの 箱に 書いても 読めない）。 */
+    if ($('b-bank-save')) $('b-bank-save').onclick = function () {
+      /* ★落ちた 時は 成功の 字を 出さない★（taiketsu 10-23 止3）＝saveBankOnly が bank-ok／bank-err に 直に 書く */
+      return saveBankOnly().then(function () {}, function (er) {
+        box('bank-err', '保存できませんでした（' + ptWhy(er && er.message) + '）');
+        box('bank-ok', '');
+      });
+    };
     $('b-pt-save').onclick = function () { return savePartner(); };
     $('b-pt-new').onclick = function () { return newPartner(); };
     /* Enter でも作れる（打ってから ボタンを探させない） */
@@ -5257,7 +7061,8 @@
     S.store = global.SeikyuStore.create({ client: sb, suite: S.suite });
     hydrateShouhizei(sb);
     bind();
-    return loadMasters().then(function () { return loadList(); }).then(function () {
+    /* ★消した 取引先の 名前も 読む★（2026-10-23 ⑤）＝読めなくても 止めない（前の 出方に 戻るだけ） */
+    return loadMasters().then(function () { return ptGoneLoad(); }).then(function () { return loadList(); }).then(function () {
       /* ★開いた所が「入力」なので、白紙の1通をここで作っておく★
          これが無いと、初めて開いた人の画面は
          請求日も明細の行も取引先も空のまま＝どこも押せない（2026-08-11 実機で発生）。
@@ -5299,6 +7104,9 @@
     _go: goScreen,
     _new: newInvoice,
     _fillSettings: fillSettings,
+    _showSetSegForTest: function (k) { return showSetSeg(k); },   // テスト用: 設定の 切り替え（取引先／自社情報／テンプレート）
+    _openRowsForTest: function () { return openRowsSetting(); },  // テスト用: 入力の「枠を増やす」と 同じ 道
+    _ptAddKigenForTest: function (ms) { PT_ADD_KIGEN = ms; },     // テスト用: 取引先を 足す 確かめの 期限を 縮める
     /* ★倉庫の 字を 入れ替えて 描き直す道★＝設定を 開き直したのと 同じ（見張り用） */
     _drawBankRowsForTest: function (n) { return drawBankRows(n); },
     /* テスト用: ★相手ごとの紙の設定を 画面から 作る★（口座の札を 押した結果が 入るか を 見る為） */
@@ -5307,11 +7115,13 @@
     _loadList: function (o) { return loadList(o); },
     _issue: function () { return issue(); },
     _bookValsForTest: function () { var pi = paperInput(); return pi ? bookVals(pi) : null; },   // テスト用: 自社 Excel に 入れる 値（番号を 出さない 時に 空か）                    // テスト用: ボタンの 灰色を 通らずに 発行の 歯止めを 見る           // テスト用: 一覧だけ 読ませる（読めない 時の 知らせを 見る）
-    _recalcForTest: function () { return recalc(); },          // テスト用: 数え直しだけ走らせる
+    _recalcForTest: function () { return recalc(); },
+    _colsForTest: function () { return S.cur ? COLS.normalizeSpec(colsOf(S.cur)) : null; },   // テスト用: 今の1通の 紙の列          // テスト用: 数え直しだけ走らせる
     _fillEdit: fillEdit,          // テスト用: 入力の画面を描き直す（★見られない物は 見張れない★）
     _invAskAnswer: function (k, v) { return invAskAnswer(k, v); },   // テスト用: 聞く形に答える
     _saveDraftForTest: function () { return saveDraft(); },          // テスト用: 下書き保存を そのまま走らせる
     _renderListForTest: function () { return renderList(); },        // テスト用: 一覧を 描き直す
+    _repExcelForTest: function (m) { var keep = repMonth; repMonth = m; try { return repExcelSheet(); } finally { repMonth = keep; } },   // テスト用: 集計の Excel の 表
     _reportForTest: function (m) { return reportOf(m); },            // テスト用: 集計の数だけ取る
     /* テスト用: ★本物の紙★を そのまま返す（見張りが 紙の中身を数える為。
        ★画面と同じ道を通す★＝紙だけ別の作り方をしない） */
