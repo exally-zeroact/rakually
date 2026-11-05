@@ -188,6 +188,8 @@ body{font-family:'Noto Sans JP',sans-serif;color:#333333;background:#F0FAF4;-web
 
 <!-- ★既存Service Worker/キャッシュを削除して常に最新に(古い版が居座る問題の根絶) --><script>try{if('serviceWorker'in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){rs.forEach(function(r){r.unregister();});});}if(window.caches){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(e){}</script>
 <script src="js/render.js?v=b16f455c"></script>
+<!-- ★PDF を 送る 口（FileOut.sharePdf）★＝iPhone・iPad は 共有に PDF と 字1行（司さん 11-06「B」）。他の 端末は meisai.js の 今の 開き方 -->
+<script src="../js/file-out.js?v=3b67e3ed"></script>
 <script src="lib/nencho-declaration.js?v=b16f455c"></script>
 <!-- PDF保存=jsPDFで自前生成(A4ぴったり1ページ・ブラウザのフッター無し)。iOSのwebページ印刷は必ずURL/日付フッターが付き余白で2ページ化するため不使用。 -->
 <script src="../lib/html2canvas-1.4.1.min.js?v=b16f455c"></script>
