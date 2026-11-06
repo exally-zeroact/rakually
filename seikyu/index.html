@@ -442,8 +442,6 @@
         </div>
         <p class="hint">出来た紙を <b>印刷する・PDFにする・納品書にする・Excelにする</b>のは
           <b>「一覧」タブの「確認」</b>から できます。</p>
-        <!-- ★押せない時は なぜ押せないかを1行★（黙って何も起きない作りにしない） -->
-        <p class="hint" id="paper-gate" style="display:none"></p>
         <!-- ★紙はA4 1枚に収まるよう「実際に測って」組んである★
              印刷の画面で「用紙に合わせる／縮小」を選ぶと その寸法が崩れる。 -->
         <p class="hint" id="print-scale-note">印刷するときは、拡大・縮小を「実際のサイズ（100%）」にしてください。A4 1枚に収まるよう寸法を測って作っています。</p>
@@ -459,8 +457,20 @@
       <div class="btn-row" id="after-issue" style="display:none">
         <button class="btn-primary" type="button" id="b-after-look">出来た紙を見る（PDF・印刷）</button>
       </div>
-      <div class="pv-wrap" id="pv-wrap" style="display:none"><iframe class="pv" id="pv" title="請求書の下見"></iframe></div>
     </div>
+    <!-- ★★入力したら 紙が その場で 映る（2026-11-06）★★
+         司さん 11-04「完成形の PDF が見えないまま入力するのでイメージ湧かない」。
+         ・表 #pv と 裏 #pv-ura の 2枚＝裏で 組み終わってから id を 入れ替える（白く 光らない）
+         ・#pv-maku＝作り直している 間だけ 前の 紙に かける 白い 膜（見本＝代行請求書の「プレビュー作成中」）
+         ・#paper-gate＝出せない 理由（★畳む 箱の 外★＝畳んでいても 見える・紙の 枠の すぐ上に 1つだけ）
+         ・広い 画面（1100px〜）は 右に 並べる／狭い 画面は 入力の 下＋下の 帯「紙を見る」 -->
+    <div id="kami-waku">
+      <!-- ★押せない時は なぜ押せないかを1行★（黙って何も起きない作りにしない） -->
+      <p class="hint" id="paper-gate" style="display:none"></p>
+      <div class="pv-wrap" id="pv-wrap" style="display:none"><iframe class="pv" id="pv" title="請求書の下見"></iframe><iframe class="pv" id="pv-ura" title="請求書の下見（裏）" aria-hidden="true" tabindex="-1"></iframe><div id="pv-maku" style="display:none"><span>プレビュー作成中</span></div></div>
+    </div>
+    <!-- ★帯「紙を見る」★（狭い 画面だけ・下の タブの 上）＝押すと 紙を 大きく（ファイルを 作る ボタンは 出さない＝09-08 司さん「ここにいらん」） -->
+    <button type="button" id="kami-obi" disabled><span id="kami-obi-t">紙はまだ出ません</span></button>
   </section>
 
   <!-- ═══ ③ 設定 ═══ -->
